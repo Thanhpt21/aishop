@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  password      String
+  name          String?
+  role          String         @default("user")
+  createdAt     DateTime       @default(now())
+  
+  // Quan hệ 1-n: Một User có nhiều Conversations
+  conversations Conversation[]
+  
+  // Quan hệ 1-n: Một User có thể gửi nhiều Messages
+  messages      Message[]
+}
+
+model Conversation {
+  id            String     @id @default(uuid())
+  title         String?
+  
+  // Khóa ngoại trỏ đến User (Quan hệ 1-n)
+  userId        String?
+  // Trường quan hệ ngược lại (user là người tạo/sở hữu conversation)
+  user          User?      @relation(fields: [userId], references: [id])
+  
+  metadata      Json?
+  createdAt     DateTime   @default(now())
+  
+  // Quan hệ 1-n: Một Conversation có nhiều Messages
+  messages      Message[]
+  
+  @@index([userId]) // Thêm index cho khóa ngoại để tối ưu truy vấn
+}
+
+model Message {
+  id             String         @id @default(uuid())
+  
+  // Khóa ngoại trỏ đến Conversation
+  conversationId String
+  // Khóa ngoại trỏ đến User
+  userId         String?
+  
+  role           String
+  content        String
+  tokens         Int?
+  source         String
+  metadata       Json?
+  embedding      String?
+  createdAt      DateTime       @default(now())
+
+  // Quan hệ n-1: Message thuộc về một Conversation
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  // Quan hệ n-1: Message được gửi bởi một User (có thể null nếu là message của AI)
+  user           User?          @relation(fields: [userId], references: [id])
+  
+  @@index([conversationId]) // Thêm index cho khóa ngoại
+  @@index([userId])        // Thêm index cho khóa ngoại
+}
+
+model Response {
+  id        String   @id @default(uuid())
+  hash      String   @unique
+  content   String
+  usage     Json?
+  createdAt DateTime @default(now())
+}
+
+model PromptHash {
+  id               String   @id @default(uuid())
+  promptHash       String
+  responseId       String?
+  normalizedPrompt String?
+  createdAt        DateTime @default(now())
+}
+
+model TrainingDataExport {
+  id        String   @id @default(uuid())
+  status    String
+  path      String?
+  createdAt DateTime @default(now())
+}
+
+model ApiKey {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+}
