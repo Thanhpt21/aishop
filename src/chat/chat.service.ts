@@ -82,13 +82,12 @@ export class ChatService {
       });
 
       // Lưu response + hash
-      const resp = await tx.response.create({
-        data: {
-          hash,
-          content: aiResponse.text,
-          usage: aiResponse.usage || {},
-        },
+      const resp = await tx.response.upsert({
+        where: { hash },
+        update: {}, // nếu đã tồn tại thì không update gì
+        create: { hash, content: aiResponse.text, usage: aiResponse.usage || {} },
       });
+
 
       await tx.promptHash.create({
         data: {
@@ -122,4 +121,30 @@ export class ChatService {
   async getMessages(id: string) {
     return this.prisma.message.findMany({ where: { conversationId: id }, orderBy: { createdAt: 'asc' }});
   }
+
+async getMessagesByUser(userId: string) {
+
+  // Lấy tất cả conversation có user này
+  const conversations = await this.prisma.conversation.findMany({
+    where: { userId },
+    select: { id: true, userId: true, createdAt: true },
+  });
+
+  const conversationIds = conversations.map(c => c.id);
+
+  if (!conversationIds.length) {
+    return [];
+  }
+
+  // Lấy tất cả message trong các conversation đó (user + assistant)
+  const messages = await this.prisma.message.findMany({
+    where: {
+      conversationId: { in: conversationIds },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  return messages;
+}
+
 }
