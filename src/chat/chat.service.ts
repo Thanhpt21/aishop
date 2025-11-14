@@ -64,7 +64,7 @@ export class ChatService {
 
     // 4. GỌI OPENAI
     const aiResponse = await this.openai.callOpenAI(
-      prompt + ' Chỉ tư vấn về máy tính, laptop, phần cứng, phần mềm, lập trình. Từ chối mọi câu hỏi khác.',
+      prompt,
       metadata
     );
 
