@@ -13,6 +13,7 @@ export class ProductService {
     const product = await this.prisma.product.create({
       data: {
         name: dto.name,
+         slug: dto.slug,
         description: dto.description ?? null,
         price: dto.price,
         weight: dto.weight ?? null,
@@ -155,6 +156,7 @@ export class ProductService {
       where: { id },
       data: {
         name: dto.name ?? product.name,
+        slug: dto.slug ?? product.slug,
         description: dto.description ?? product.description,
         price: dto.price ?? product.price,
         weight: dto.weight ?? product.weight,
@@ -222,6 +224,7 @@ export class ProductService {
         // Map Excel columns to Product data - DÙNG ĐÚNG TÊN CỘT NHƯ EXCEL
        const productData: CreateProductDto = {
         name: String(rowData['Tên sản phẩm'] || '').trim(),
+         slug: rowData['Slug'] ? String(rowData['Slug']).trim() : undefined,
         description: rowData['Mô tả'] ? String(rowData['Mô tả']).trim() : undefined,
         price: this.parseNumber(rowData['Giá'] || 0),
         // SỬA QUAN TRỌNG: Dùng đúng tên cột từ Excel
@@ -253,6 +256,7 @@ export class ProductService {
         const createdProduct = await this.prisma.product.create({
           data: {
             name: productData.name,
+             slug: productData.slug,
             description: productData.description,
             price: productData.price,
             weight: productData.weight,
@@ -315,6 +319,7 @@ export class ProductService {
       // Format data để export
       const exportData = products.map(product => ({
         'Tên sản phẩm': product.name,
+        'Slug': product.slug,
         'Mô tả': product.description || '',
         'Giá': product.price,
         'Cân nặng (kg)': product.weight || '',
@@ -335,6 +340,7 @@ export class ProductService {
       // Auto-size columns
       const colWidths = [
         { wch: 30 }, // Tên sản phẩm
+        { wch: 20 }, // Slug
         { wch: 40 }, // Mô tả
         { wch: 15 }, // Giá
         { wch: 15 }, // Cân nặng
@@ -369,6 +375,7 @@ export class ProductService {
       const templateData = [
         {
           'Tên sản phẩm': 'Áo thun nam cổ tròn',
+          'Slug': 'ao-thun-nam-co-tron',
           'Mô tả': 'Áo thun nam chất cotton, thoáng mát',
           'Giá': 150000,
           'Cân nặng (kg)': 0.2,
@@ -381,6 +388,7 @@ export class ProductService {
         },
         {
           'Tên sản phẩm': 'Quần jean nam',
+          'Slug': 'quan-jean-nam',
           'Mô tả': 'Quần jean nam form slim',
           'Giá': 350000,
           'Cân nặng (kg)': 0.5,
@@ -398,10 +406,18 @@ export class ProductService {
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Template');
       
       // Auto-size columns
-      const colWidths = [
-        { wch: 25 }, { wch: 30 }, { wch: 10 }, { wch: 12 }, 
-        { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 15 },
-        { wch: 15 }, { wch: 10 }
+       const colWidths = [
+        { wch: 25 }, // Tên sản phẩm
+        { wch: 20 }, // Slug
+        { wch: 30 }, // Mô tả
+        { wch: 10 }, // Giá
+        { wch: 12 }, // Cân nặng
+        { wch: 12 }, // Chiều dài
+        { wch: 12 }, // Chiều rộng
+        { wch: 12 }, // Chiều cao
+        { wch: 15 }, // Danh mục
+        { wch: 15 }, // Thương hiệu
+        { wch: 10 }, // Trạng thái
       ];
       worksheet['!cols'] = colWidths;
       

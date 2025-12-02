@@ -128,17 +128,18 @@ export class ChatService {
               id: p.id,
               name: p.name,
               price: p.price,
-              description: p.description
+              description: p.description,
+              slug: p.slug,
             })),
+            productIds: productSearch.products.map(p => p.id),
             query: productSearch.query,
             confidence: productSearch.confidence,
             searchMethod: productSearch.method,
-            expectsFollowUp: true,                        // 👈 THÊM DÒNG NÀY
-           followUpType: 'product_detail_confirmation'   // 👈 THÊM DÒNG NÀY
+            expectsFollowUp: true,                        
+            followUpType: 'product_detail_confirmation'   
           }
         },
       });
-
       return {
         cached: false,
         fromExampleQA: false,
@@ -453,9 +454,6 @@ private async findProductsForPrompt(
     // 1. Trích xuất từ khóa sản phẩm từ prompt
     const keywords = this.extractProductKeywords(prompt);
     
-    // Debug logging
-    console.log('🔍 [Product Search] Prompt:', prompt);
-    console.log('📝 [Product Search] Extracted keywords:', keywords);
     
     const hasProductIntent = productIntentKeywords.some(k => lowerPrompt.includes(k));
     
@@ -477,7 +475,7 @@ private async findProductsForPrompt(
 
     // **ƯU TIÊN 1: Tìm theo tên sản phẩm CHÍNH XÁC HƠN**
     if (keywords.length > 0) {
-      console.log('🔎 [Product Search] Searching by name/category...');
+
       
       const searchPromises = keywords.map(keyword => {
         return this.prisma.product.findMany({
@@ -505,20 +503,20 @@ private async findProductsForPrompt(
 
       const results = await Promise.all(searchPromises);
       results.forEach(found => {
-        console.log(`📦 Found ${found.length} products for keyword`);
+
         products.push(...found);
       });
       
       if (products.length > 0) {
         confidence = 0.7;
         searchMethod = 'product_name_or_category';
-        console.log(`✅ Found ${products.length} products by name/category`);
+
       }
     }
 
     // **ƯU TIÊN 2: Tìm theo description (chỉ khi không tìm thấy theo name/category)**
     if (products.length === 0 && keywords.length > 0) {
-      console.log('🔎 [Product Search] Searching by description...');
+
       
       const descriptionPromises = keywords.map(keyword => {
         return this.prisma.product.findMany({
@@ -535,20 +533,17 @@ private async findProductsForPrompt(
 
       const descriptionResults = await Promise.all(descriptionPromises);
       descriptionResults.forEach(found => {
-        console.log(`📦 Found ${found.length} products in description for keyword`);
         products.push(...found);
       });
       
       if (products.length > 0) {
         confidence = 0.5; // Confidence thấp hơn vì match trong description
         searchMethod = 'product_description';
-        console.log(`✅ Found ${products.length} products by description`);
       }
     }
 
     // **ƯU TIÊN 3: Nếu có intent là tìm sản phẩm nhưng không có keyword cụ thể**
     if (products.length === 0 && hasProductIntent) {
-      console.log('🔎 [Product Search] Searching general products...');
       
       products = await this.prisma.product.findMany({
         where: { isActive: true },
@@ -559,13 +554,13 @@ private async findProductsForPrompt(
       if (products.length > 0) {
         confidence = 0.6;
         searchMethod = 'general_product_query';
-        console.log(`✅ Found ${products.length} general products`);
+
       }
     }
 
     // **ƯU TIÊN 4: Tìm theo category từ intent analysis**
     if (products.length === 0 && analysis.category && analysis.category !== 'general') {
-      console.log(`🔎 [Product Search] Searching by analysis category: ${analysis.category}`);
+
       
       products = await this.prisma.product.findMany({
         where: {
@@ -580,12 +575,12 @@ private async findProductsForPrompt(
       if (products.length > 0) {
         confidence = 0.5;
         searchMethod = 'category_match';
-        console.log(`✅ Found ${products.length} products by analysis category`);
+
       }
     }
 
     // 3. SCORING và SẮP XẾP THÔNG MINH
-    console.log(`📊 [Product Search] Total products before scoring: ${products.length}`);
+
     
     // Tính điểm cho từng sản phẩm
     const scoredProducts = products.map(product => {
@@ -594,10 +589,7 @@ private async findProductsForPrompt(
     });
 
     // Debug: log tất cả sản phẩm và điểm số
-    console.log('📈 [Product Search] All products with scores:');
-    scoredProducts.forEach(p => {
-      console.log(`  - ${p.name} (${p.category}): ${p.score} points`);
-    });
+
 
     // Sắp xếp theo score giảm dần
     scoredProducts.sort((a, b) => b.score - a.score);
@@ -618,9 +610,6 @@ private async findProductsForPrompt(
       new Map(finalProducts.map(p => [p.id, p])).values()
     );
 
-    console.log(`🏆 [Product Search] High quality products (score >= 8): ${highQualityProducts.length}`);
-    console.log(`🎯 [Product Search] Final products: ${uniqueProducts.length}`);
-    console.log('🎯 [Product Search] Final product names:', uniqueProducts.map(p => p.name));
 
     // Điều chỉnh confidence dựa trên số lượng và chất lượng kết quả
     let finalConfidence = confidence;
@@ -692,42 +681,42 @@ private calculateProductScore(product: any, keywords: string[], lowerPrompt: str
     // 1. Exact match trong tên (quan trọng nhất - 6 điểm)
     if (productName === kw) {
       score += 6;
-      console.log(`    [+6] Exact name match: "${kw}" in "${productName}"`);
+
     }
     
     // 2. Phần của tên chứa keyword (5 điểm)
     else if (productName.includes(kw)) {
       score += 5;
-      console.log(`    [+5] Name contains: "${kw}" in "${productName}"`);
+
     }
     
     // 3. Match trong category (4 điểm)
     if (productCategory.includes(kw)) {
       score += 4;
-      console.log(`    [+4] Category match: "${kw}" in "${productCategory}"`);
+
     }
     
     // 4. Match trong description (2 điểm - giảm xuống)
     if (productDescription.includes(kw)) {
       score += 2;
-      console.log(`    [+2] Description contains: "${kw}"`);
+
     }
     
     // 5. Bonus cho từ ghép trong description
     if (kw.includes(' ') && productDescription.includes(kw)) {
       score += 3; // Thêm điểm cho match cụm từ
-      console.log(`    [+3] Compound phrase match: "${kw}"`);
+
     }
   });
   
   // Bonus cho match giới tính
   if (lowerPrompt.includes('nam') && productName.includes('nam')) {
     score += 3;
-    console.log(`    [+3] Gender match: "nam"`);
+
   }
   if (lowerPrompt.includes('nữ') && productName.includes('nữ')) {
     score += 3;
-    console.log(`    [+3] Gender match: "nữ"`);
+
   }
   
   // Bonus cho sản phẩm mới (tạo trong 30 ngày)
@@ -735,17 +724,16 @@ private calculateProductScore(product: any, keywords: string[], lowerPrompt: str
     const daysOld = (new Date().getTime() - new Date(product.createdAt).getTime()) / (1000 * 3600 * 24);
     if (daysOld < 30) {
       score += 1;
-      console.log(`    [+1] New product (${Math.round(daysOld)} days old)`);
+
     }
   }
   
   // Bonus cho sản phẩm có giá tốt (dưới 200k)
   if (product.price < 200000) {
     score += 1;
-    console.log(`    [+1] Good price: ${product.price}`);
+
   }
   
-  console.log(`    [Total] ${product.name}: ${score} points`);
   return score;
 }
 private extractProductKeywords(text: string): string[] {
@@ -817,53 +805,38 @@ private extractProductKeywords(text: string): string[] {
     ...singleKeywords.filter(kw => !compoundKeywords.some(ckw => ckw.includes(kw)))
   ];
 
-  console.log(`🔤 [Keyword Extraction] From: "${text}"`);
-  console.log(`🔤 [Keyword Extraction] Result: ${sortedKeywords.join(', ')}`);
 
   return sortedKeywords;
 }
 
 private formatProductResponse(products: any[], prompt: string): string {
   if (products.length === 0) {
-    return 'Hiện tại shop chưa có sản phẩm phù hợp với yêu cầu của bạn. Bạn có thể thử tìm kiếm với từ khóa khác hoặc liên hệ với chúng tôi để được tư vấn thêm.';
+    return 'Hiện tại shop chưa có sản phẩm phù hợp...';
   }
 
-  const lowerPrompt = prompt.toLowerCase();
-  
-  // Xác định loại response dựa trên số lượng sản phẩm và prompt
   if (products.length === 1) {
     const product = products[0];
+    const slug = product.slug || '';
     
-    // Nếu hỏi "có ... không?" → trả lời ngắn gọn
-    if (lowerPrompt.includes('có') && lowerPrompt.includes('không')) {
-      return `Có sản phẩm **${product.name}** với giá ${this.formatPrice(product.price)}. Bạn có muốn biết thêm thông tin chi tiết không?`;
-    }
-    
-    // Nếu hỏi "sản phẩm nào" → trả lời có thể có nhiều nhưng chỉ tìm thấy 1
-    if (lowerPrompt.includes('nào') || lowerPrompt.includes('gì')) {
-      return `Tìm thấy sản phẩm **${product.name}** với giá ${this.formatPrice(product.price)}. Bạn có muốn biết thêm thông tin chi tiết không?`;
-    }
-    
-    // Mặc định cho 1 sản phẩm
-    return `Tìm thấy sản phẩm **${product.name}** với giá ${this.formatPrice(product.price)}.`;
+    // ✅ ĐẶT SLUG SAU TÊN SẢN PHẨM
+    return `Tìm thấy sản phẩm **${product.name}** (\`${slug}\`) với giá ${this.formatPrice(product.price)}. 
+
+Bạn có muốn biết thêm thông tin chi tiết về sản phẩm này không?`;
   } 
   else if (products.length === 2) {
-    // Cho 2 sản phẩm
-    const productList = products.map((p, i) => `${i + 1}. **${p.name}** - ${this.formatPrice(p.price)}`).join('\n');
-    
-    if (lowerPrompt.includes('gợi ý') || lowerPrompt.includes('nên mua')) {
-      return `Dưới đây là 2 sản phẩm gợi ý cho bạn:\n\n${productList}\n\nBạn muốn xem thông tin chi tiết sản phẩm nào?`;
-    }
+    const productList = products.map((p, i) => {
+      const slug = p.slug || '';
+      // ✅ ĐẶT SLUG SAU TÊN SẢN PHẨM
+      return `${i + 1}. **${p.name}** (\`${slug}\`) - ${this.formatPrice(p.price)}`;
+    }).join('\n');
     
     return `Tìm thấy 2 sản phẩm phù hợp:\n\n${productList}\n\nBạn muốn xem thông tin chi tiết sản phẩm nào?`;
   }
   else {
-    // Cho 3 sản phẩm (tối đa)
-    const productList = products.map((p, i) => `${i + 1}. **${p.name}** - ${this.formatPrice(p.price)}`).join('\n');
-    
-    if (lowerPrompt.includes('gợi ý') || lowerPrompt.includes('nên mua')) {
-      return `Dưới đây là 3 sản phẩm gợi ý cho bạn:\n\n${productList}\n\nBạn có thể hỏi thêm về thông tin chi tiết của bất kỳ sản phẩm nào!`;
-    }
+    const productList = products.map((p, i) => {
+      const slug = p.slug || '';
+      return `${i + 1}. **${p.name}** (\`${slug}\`) - ${this.formatPrice(p.price)}`;
+    }).join('\n');
     
     return `Tìm thấy ${products.length} sản phẩm phù hợp:\n\n${productList}\n\nBạn có thể hỏi thêm về thông tin chi tiết của bất kỳ sản phẩm nào!`;
   }
@@ -913,7 +886,7 @@ private formatProductResponse(products: any[], prompt: string): string {
     }).format(price);
   }
 
-  private async detectFollowUpIntent(
+private async detectFollowUpIntent(
   prompt: string,
   conversationId: string
 ): Promise<{
@@ -923,35 +896,38 @@ private formatProductResponse(products: any[], prompt: string): string {
 }> {
   const lowerPrompt = prompt.toLowerCase().trim();
   
-  // Các từ khóa xác nhận "có"
-  const confirmationKeywords = [
+  
+  // Từ khóa cho mọi loại follow-up (kết hợp cả xác nhận và yêu cầu chi tiết)
+  const followUpKeywords = [
     'có', 'được', 'ok', 'oke', 'yes', 'ừ', 'uhm', 
     'đồng ý', 'muốn', 'chi tiết', 'thông tin thêm',
-    'cho tôi biết thêm', 'nói thêm', 'mô tả'
+    'cho tôi biết thêm', 'nói thêm', 'mô tả',
+    'cho tui', 'cho em', 'cho mình', 'cho anh',
+    'thông tin chi tiết', 'giới thiệu kỹ hơn',
+    'kể thêm', 'nói kỹ', 'mô tả chi tiết',
+    'về', 'áo', 'quần', 'sản phẩm' // Thêm từ chung về sản phẩm
   ];
   
   // Các từ khóa từ chối "không"
   const rejectionKeywords = [
     'không', 'thôi', 'không cần', 'ko', 'no',
-    'để sau', 'không muốn'
+    'để sau', 'không muốn', 'khỏi'
   ];
   
-  // Kiểm tra nếu là xác nhận hoặc từ chối
-  const isConfirmation = confirmationKeywords.some(kw => lowerPrompt.includes(kw));
+  const isFollowUpRequest = followUpKeywords.some(kw => lowerPrompt.includes(kw));
   const isRejection = rejectionKeywords.some(kw => lowerPrompt.includes(kw));
   
-  if (!isConfirmation && !isRejection) {
+  if (!isFollowUpRequest && !isRejection) {
     return { isFollowUp: false };
   }
   
-  // Lấy tin nhắn cuối cùng của assistant để check context
+  // Lấy tin nhắn cuối cùng của assistant
   const lastAssistantMessage = await this.prisma.message.findFirst({
-    where: {
+    where: { 
       conversationId,
       role: 'assistant'
     },
-    orderBy: { createdAt: 'desc' },
-    take: 1
+    orderBy: { createdAt: 'desc' }
   });
   
   if (!lastAssistantMessage || !lastAssistantMessage.metadata) {
@@ -959,19 +935,78 @@ private formatProductResponse(products: any[], prompt: string): string {
   }
   
   const metadata = lastAssistantMessage.metadata as any;
+
   
   // Kiểm tra nếu tin nhắn trước có expectsFollowUp
-  if (metadata.expectsFollowUp && metadata.products) {
-    return {
-      isFollowUp: true,
-      followUpType: isConfirmation ? 'product_detail_request' : 'product_detail_rejection',
-      referencedProducts: metadata.products
-    };
+  if (metadata.expectsFollowUp === true) {
+    let referencedProducts = [];
+    
+    // Ưu tiên lấy sản phẩm từ metadata
+    if (metadata.products && metadata.products.length > 0) {
+      referencedProducts = metadata.products;
+    } 
+    // Nếu không có trong metadata, thử tìm từ content
+    else if (lastAssistantMessage.content) {
+      // Trích xuất tên sản phẩm từ content
+      const productNames = this.extractProductNamesFromMessage(lastAssistantMessage.content);
+      
+      if (productNames.length > 0) {
+        // Tìm sản phẩm phù hợp
+        for (const productName of productNames) {
+          const product = await this.prisma.product.findFirst({
+            where: {
+              name: {
+                contains: productName,
+                mode: 'insensitive'
+              }
+            }
+          });
+          
+          if (product && !referencedProducts.some(p => p.id === product.id)) {
+            referencedProducts.push({
+              id: product.id,
+              name: product.name,
+              price: product.price,
+              description: product.description
+            });
+          }
+        }
+        
+
+      }
+    }
+    
+    if (isFollowUpRequest) {
+      return {
+        isFollowUp: true,
+        followUpType: 'product_detail_request',
+        referencedProducts: referencedProducts.length > 0 ? referencedProducts : []
+      };
+    }
+    
+    if (isRejection) {
+      return {
+        isFollowUp: true,
+        followUpType: 'product_detail_rejection',
+        referencedProducts: []
+      };
+    }
   }
   
+
   return { isFollowUp: false };
 }
 
+// Thêm phương thức trích xuất tên sản phẩm từ tin nhắn
+private extractProductNamesFromMessage(content: string): string[] {
+  // Tìm các tên sản phẩm trong định dạng **Tên sản phẩm**
+  const productNameRegex = /\*\*([^*]+)\*\*/g;
+  const matches = content.match(productNameRegex);
+  
+  if (!matches) return [];
+  
+  return matches.map(match => match.replace(/\*\*/g, '').trim());
+}
 private async handleFollowUpResponse(
   prompt: string,
   conversationId: string,
@@ -1000,25 +1035,31 @@ private async handleFollowUpResponse(
   let responseText = '';
 
   if (followUpType === 'product_detail_request') {
-    // User muốn biết chi tiết → TƯ VẤN SÂU
-    const product = referencedProducts[0]; // Lấy sản phẩm đầu tiên
+    // User muốn biết chi tiết
+    let targetProduct = referencedProducts[0];
     
-    responseText = `Tuyệt vời! Để tư vấn chi tiết về **${product.name}**:
-
-📋 **Thông tin chi tiết:**
-${product.description || 'Sản phẩm chất lượng cao, được nhiều khách hàng tin dùng.'}
-
-💰 **Giá:** ${this.formatPrice(product.price)}
-
-✨ **Đặc điểm nổi bật:**
-- Chất liệu cao cấp, bền đẹp
-- Thiết kế hiện đại, phù hợp nhiều dáng người
-- Dễ phối đồ, phù hợp nhiều phong cách
-
-📦 **Thông tin đặt hàng:**
-Bạn có thể đặt hàng ngay hoặc hỏi thêm về size, màu sắc, chính sách đổi trả.
-
-Bạn có câu hỏi nào khác về sản phẩm này không?`;
+    // Nếu có nhiều sản phẩm, kiểm tra xem user muốn sản phẩm nào
+    if (referencedProducts.length > 1) {
+      const lowerPrompt = prompt.toLowerCase();
+      const targetProductName = referencedProducts.find(p => 
+        lowerPrompt.includes(p.name.toLowerCase())
+      );
+      
+      if (targetProductName) {
+        targetProduct = targetProductName;
+      }
+    }
+    
+    // Lấy thông tin đầy đủ từ database
+    const fullProduct = await this.prisma.product.findUnique({
+      where: { id: targetProduct.id }
+    });
+    
+    if (!fullProduct) {
+      responseText = `Xin lỗi, không tìm thấy thông tin chi tiết về sản phẩm này.`;
+    } else {
+      responseText = this.formatProductDetail(fullProduct);
+    }
 
   } else if (followUpType === 'product_detail_rejection') {
     // User không muốn biết chi tiết
@@ -1064,6 +1105,38 @@ Bạn có câu hỏi nào khác về sản phẩm này không?`;
     usage: {}
   };
 }
+
+private formatProductDetail(product: any): string {
+  let response = `**${product.name}**\n\n`;
+  
+  response += `💰 **Giá:** ${this.formatPrice(product.price)}\n`;
+  
+  if (product.category) {
+    response += `📂 **Danh mục:** ${product.category}\n`;
+  }
+  
+  if (product.brand) {
+    response += `🏷️ **Thương hiệu:** ${product.brand}\n`;
+  }
+  
+  if (product.description) {
+    response += `\n📝 **Mô tả:** ${product.description}\n`;
+  }
+  
+  // Thông tin kích thước nếu có
+  if (product.weight || product.length || product.width || product.height) {
+    response += `\n📏 **Thông số kỹ thuật:**\n`;
+    if (product.weight) response += `- Trọng lượng: ${product.weight} kg\n`;
+    if (product.length && product.width && product.height) {
+      response += `- Kích thước: ${product.length}cm × ${product.width}cm × ${product.height}cm\n`;
+    }
+  }
+  
+  // Câu hỏi tiếp theo
+  response += `\nBạn có muốn biết về chính sách đổi trả, vận chuyển hoặc cách đặt hàng không?`;
+  
+  return response;
+}
   // ==================== NÂNG CẤP EXAMPLE QA MATCHING ====================
 
 async findAnswerFromExampleQA(prompt: string): Promise<any> {
@@ -1083,8 +1156,8 @@ async findAnswerFromExampleQA(prompt: string): Promise<any> {
       // Lấy match tốt nhất
       const bestMatch = matches[0];
       
-      // Ngưỡng similarity giảm xuống 0.6 để bắt được nhiều hơn
-      if (bestMatch.similarity >= 0.6) {
+      // Ngưỡng similarity giảm xuống 0.5 để bắt được nhiều hơn
+      if (bestMatch.similarity >= 0.5) {
         // Lấy intent và category từ ExampleQA (KHÔNG từ prompt analysis)
         return {
           foundMatch: true,
@@ -1176,17 +1249,6 @@ private async findSimilarQuestionsAdvanced(userQuestion: string, exampleQAs: any
       phraseMatchScore * 0.15 // Thêm phrase matching
     );
 
-    // Debug logging cho các matches tốt
-    if (combinedScore > 0.5) {
-      console.log('🔍 Potential match found:', {
-        userQuestion,
-        exampleQuestion: example.question,
-        combinedScore: combinedScore.toFixed(3),
-        keywordOverlap: keywordOverlapScore.toFixed(3),
-        phraseMatch: phraseMatchScore.toFixed(3),
-        commonKeywords: this.getCommonKeywords(userKeywords, exampleKeywords)
-      });
-    }
 
     // Giảm threshold xuống 0.3 để bắt nhiều hơn
     if (combinedScore > 0.3) {
@@ -1376,9 +1438,6 @@ private getCommonKeywords(keywords1: string[], keywords2: string[]): string[] {
     const patternMatch = this.checkMeasurementPattern(measurements1, measurements2);
     
     if (patternMatch) {
-      console.log('Measurement pattern matched!', {
-        str1, str2, measurements1, measurements2
-      });
       return 0.9; // Tăng score cho matching số đo
     }
     
@@ -1412,11 +1471,6 @@ private getCommonKeywords(keywords1: string[], keywords2: string[]): string[] {
       // Nếu chênh lệch trong vòng 10cm và có cùng pattern
       const isPatternMatch = chestDiff <= 10 && hipDiff <= 10;
       
-      if (isPatternMatch) {
-        console.log('Measurement pattern match detected:', {
-          nums1, nums2, chestDiff, hipDiff
-        });
-      }
       
       return isPatternMatch;
     }
@@ -1557,7 +1611,6 @@ private getCommonKeywords(keywords1: string[], keywords2: string[]): string[] {
             },
           });
 
-          console.log(`Training data created from ExampleQA match: ${message.id}`);
           
           // Tăng usage count của ExampleQA được match
           if (analysis.matchedQuestionId) {
@@ -1793,7 +1846,7 @@ private getCommonKeywords(keywords1: string[], keywords2: string[]): string[] {
       bestMatch: matches[0] ? {
         question: matches[0].question,
         similarity: matches[0].similarity,
-        wouldMatch: matches[0].similarity >= 0.6
+        wouldMatch: matches[0].similarity >= 0.5
       } : null
     };
   }

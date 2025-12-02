@@ -1,10 +1,17 @@
 // src/product/dto/create-product.dto.ts
-import { IsNotEmpty, IsOptional, IsString, IsNumber, IsBoolean, Min } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, IsBoolean, Min, Matches } from 'class-validator';
 
 export class CreateProductDto {
   @IsNotEmpty()
   @IsString()
   name: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+    message: 'Slug chỉ được chứa chữ thường, số và dấu gạch ngang'
+  })
+  slug?: string; // THÊM DÒNG NÀY
 
   @IsOptional()
   @IsString()
