@@ -811,34 +811,38 @@ private extractProductKeywords(text: string): string[] {
 
 private formatProductResponse(products: any[], prompt: string): string {
   if (products.length === 0) {
-    return 'Hiện tại shop chưa có sản phẩm phù hợp...';
+    return 'Hiện tại shop chưa có sản phẩm phù hợp với yêu cầu của bạn.';
   }
 
+  const productList = products.map((p, i) => {
+    const slug = p.slug || '';
+    const description = p.description || '';
+    
+    // Tạo mô tả ngắn
+    let shortDescription = '';
+    if (description) {
+      shortDescription = description.length > 60 
+        ? description.substring(0, 60) + '...' 
+        : description;
+    }
+    
+    // Tạo dòng sản phẩm với bullet và slug ở cuối
+    let item = `- ${i + 1}. ${p.name} - ${this.formatPrice(p.price)}`;
+    
+    if (shortDescription) {
+      item += `\n   📝 ${shortDescription}`;
+    }
+    
+    // Thêm slug vào cuối mỗi sản phẩm
+    item += ` \`${slug}\``;
+    
+    return item;
+  }).join('\n\n');
+  
   if (products.length === 1) {
-    const product = products[0];
-    const slug = product.slug || '';
-    
-    // ✅ ĐẶT SLUG SAU TÊN SẢN PHẨM
-    return `Tìm thấy sản phẩm **${product.name}** (\`${slug}\`) với giá ${this.formatPrice(product.price)}. 
-
-Bạn có muốn biết thêm thông tin chi tiết về sản phẩm này không?`;
-  } 
-  else if (products.length === 2) {
-    const productList = products.map((p, i) => {
-      const slug = p.slug || '';
-      // ✅ ĐẶT SLUG SAU TÊN SẢN PHẨM
-      return `${i + 1}. **${p.name}** (\`${slug}\`) - ${this.formatPrice(p.price)}`;
-    }).join('\n');
-    
-    return `Tìm thấy 2 sản phẩm phù hợp:\n\n${productList}\n\nBạn muốn xem thông tin chi tiết sản phẩm nào?`;
-  }
-  else {
-    const productList = products.map((p, i) => {
-      const slug = p.slug || '';
-      return `${i + 1}. **${p.name}** (\`${slug}\`) - ${this.formatPrice(p.price)}`;
-    }).join('\n');
-    
-    return `Tìm thấy ${products.length} sản phẩm phù hợp:\n\n${productList}\n\nBạn có thể hỏi thêm về thông tin chi tiết của bất kỳ sản phẩm nào!`;
+    return `Tìm thấy sản phẩm:\n${productList}`;
+  } else {
+    return `Tìm thấy ${products.length} sản phẩm phù hợp:\n${productList}`;
   }
 }
   private getProductSuggestion(products: any[], prompt: string): string | null {
