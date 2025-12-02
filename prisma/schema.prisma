@@ -1,6 +1,7 @@
+// schema.prisma
 generator client {
   provider = "prisma-client-js"
-  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -9,69 +10,77 @@ datasource db {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  password      String
-  name          String?
-  role          String         @default("user")
-  createdAt     DateTime       @default(now())
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("user")
+  createdAt DateTime @default(now())
   
-  // Quan hệ 1-n: Một User có nhiều Conversations
   conversations Conversation[]
-  
-  // Quan hệ 1-n: Một User có thể gửi nhiều Messages
   messages      Message[]
-}
-
-model Conversation {
-  id            String     @id @default(uuid())
-  title         String?
+  trainingSessions TrainingSession[]
   
-  // Khóa ngoại trỏ đến User (Quan hệ 1-n)
-  userId        String?
-  // Trường quan hệ ngược lại (user là người tạo/sở hữu conversation)
-  user          User?      @relation(fields: [userId], references: [id])
-  
-  metadata      Json?
-  createdAt     DateTime   @default(now())
-  
-  // Quan hệ 1-n: Một Conversation có nhiều Messages
-  messages      Message[]
-  
-  @@index([userId]) // Thêm index cho khóa ngoại để tối ưu truy vấn
+  @@map("users")
 }
 
 model Message {
-  id             String         @id @default(uuid())
-  
-  // Khóa ngoại trỏ đến Conversation
+  id             String   @id @default(uuid())
   conversationId String
-  // Khóa ngoại trỏ đến User
-  userId         String?
-  
+  userId         String?  // CHO PHÉP NULL
   role           String
   content        String
   tokens         Int?
+  intent         String?
+  category       String?
+  sentiment      String?
+  confidence     Float?
+  embedding      String?
+  isTrainingExample Boolean @default(false)
   source         String
   metadata       Json?
-  embedding      String?
-  createdAt      DateTime       @default(now())
+  createdAt      DateTime @default(now())
 
-  // Quan hệ n-1: Message thuộc về một Conversation
+  // SỬA QUAN HỆ - THÊM onDelete: SetNull
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  // Quan hệ n-1: Message được gửi bởi một User (có thể null nếu là message của AI)
-  user           User?          @relation(fields: [userId], references: [id])
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  trainingData   TrainingData?
   
-  @@index([conversationId]) // Thêm index cho khóa ngoại
-  @@index([userId])        // Thêm index cho khóa ngoại
+  @@index([conversationId])
+  @@index([userId])
+  @@index([intent])
+  @@index([category])
+  @@index([isTrainingExample])
+  @@index([createdAt])
+  @@map("messages")
 }
 
+model Conversation {
+  id             String   @id @default(uuid())
+  title          String?
+  userId         String?
+  // SỬA QUAN HỆ
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  usedInTraining Boolean  @default(false)
+  trainingScore  Float?
+  tags           String[]
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  messages       Message[]
+  
+  @@index([userId])
+  @@index([usedInTraining])
+  @@index([createdAt])
+  @@map("conversations")
+}
 model Response {
   id        String   @id @default(uuid())
   hash      String   @unique
   content   String
   usage     Json?
   createdAt DateTime @default(now())
+  
+  @@map("responses")
 }
 
 model PromptHash {
@@ -80,13 +89,168 @@ model PromptHash {
   responseId       String?
   normalizedPrompt String?
   createdAt        DateTime @default(now())
+  
+  @@map("prompt_hashes")
 }
 
-model TrainingDataExport {
-  id        String   @id @default(uuid())
-  status    String
-  path      String?
-  createdAt DateTime @default(now())
+model TrainingSession {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  datasetConfig Json?
+  dataSource    String
+  modelType     String
+  modelName     String?
+  baseModel     String?
+  parameters    Json?
+  status        String    @default("pending")
+  progress      Float     @default(0)
+  currentStep   String?
+  accuracy      Float?
+  loss          Float?
+  metrics       Json?
+  confusionMatrix Json?
+  modelPath     String?
+  logsPath      String?
+  reportPath    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+  userId        String?
+  user          User?     @relation(fields: [userId], references: [id])
+  trainingData  TrainingData[]
+  evaluations   ModelEvaluation[]
+  deployedModels DeployedModel[] 
+  exampleQAs    ExampleQA[]
+  
+  @@index([userId])
+  @@index([status])
+  @@index([modelType])
+  @@index([createdAt])
+  @@map("training_sessions")
+}
+
+model TrainingData {
+  id                 String   @id @default(uuid())
+  messageId          String?  @unique  // ADDED: @unique for one-to-one
+  message            Message? @relation(fields: [messageId], references: [id])
+  input              String
+  output             String?
+  category           String?
+  intent             String?
+  qualityScore       Float?
+  isVerified         Boolean @default(false)
+  verifiedBy         String?
+  source             String
+  language           String   @default("vi")
+  difficulty         String?
+  trainingSessionId  String?
+  trainingSession    TrainingSession? @relation(fields: [trainingSessionId], references: [id])
+  metadata           Json?
+  createdAt          DateTime @default(now())
+  
+  @@index([messageId])
+  @@index([trainingSessionId])
+  @@index([category])
+  @@index([intent])
+  @@index([qualityScore])
+  @@map("training_data")
+}
+
+model ModelEvaluation {
+  id                 String   @id @default(uuid())
+  testDataset        Json?
+  metrics            Json
+  overallScore       Float?
+  details            Json?
+  trainingSessionId  String
+  trainingSession    TrainingSession @relation(fields: [trainingSessionId], references: [id])
+  createdAt          DateTime @default(now())
+  
+  @@index([trainingSessionId])
+  @@index([overallScore])
+  @@map("model_evaluations")
+}
+
+model DeployedModel {
+  id                 String   @id @default(uuid())
+  name               String
+  version            String
+  modelType          String
+  modelPath          String
+  isActive           Boolean @default(false)
+  accuracy           Float?
+  latency            Float?
+  trainingSessionId  String?
+  trainingSession    TrainingSession? @relation(fields: [trainingSessionId], references: [id])
+  createdAt          DateTime @default(now())
+  deployedAt         DateTime?
+  
+  @@unique([name, version])
+  @@index([isActive])
+  @@index([modelType])
+  @@map("deployed_models")
+}
+
+model TrainingConfig {
+  id                   String   @id @default(uuid())
+  name                 String   @unique
+  modelType            String
+  parameters           Json
+  preprocessingSteps   Json?
+  features             Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  
+  @@map("training_configs")
+}
+
+model ExampleQA {
+  id          String   @id @default(uuid())
+  question    String   // Câu hỏi mẫu
+  answer      String   // Câu trả lời mẫu
+  intent      String?  // Mục đích của câu hỏi
+  category    String?  // Danh mục/chủ đề
+  language    String   @default("vi") // Ngôn ngữ
+  isActive    Boolean  @default(true) // Có đang được sử dụng không
+  tags        String[] // Tags để filter/tìm kiếm
+  usageCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  trainingSessions TrainingSession[]
+
+  @@index([intent])
+  @@index([category])
+  @@index([language])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("example_qa")
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  price       Float    @default(0)
+  weight      Float?
+  length           Float?    // cm
+  width            Float?    // cm  
+  height           Float?    // cm
+  category    String?
+  brand       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+  @@index([category])
+  @@index([brand])
+  @@index([price])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("products")
 }
 
 model ApiKey {
@@ -94,4 +258,15 @@ model ApiKey {
   key       String   @unique
   name      String?
   createdAt DateTime @default(now())
+  
+  @@map("api_keys")
+}
+
+model TrainingDataExport {
+  id        String   @id @default(uuid())
+  status    String
+  path      String?
+  createdAt DateTime @default(now())
+  
+  @@map("training_data_exports")
 }
