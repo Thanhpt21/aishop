@@ -12,6 +12,7 @@ export class ProductResponseDto {
   category?: string;
   brand?: string;
   isActive: boolean;
+  ownerEmail?: string;
   createdAt: Date;
   updatedAt: Date;
 
@@ -28,6 +29,7 @@ export class ProductResponseDto {
     this.category = product.category;
     this.brand = product.brand;
     this.isActive = product.isActive;
+    this.ownerEmail = product.ownerEmail;
     this.createdAt = product.createdAt;
     this.updatedAt = product.updatedAt;
   }

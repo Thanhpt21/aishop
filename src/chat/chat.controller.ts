@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Request, UseGuards, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Request, UseGuards } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -7,19 +7,15 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
+  // ============ MAIN CHAT ENDPOINT ============
   @Post('chat')
   async chat(@Body() body: any, @Request() req: any) {
     const userId = req.user?.userId;
-    return this.chatService.handleChat({...body, userId});
+    const ownerEmail = req.user?.email;
+    return this.chatService.handleChat({ ...body, userId, ownerEmail });
   }
 
-  @Get('messages')
-  async getMessagesByUserId(@Request() req: any) {
-    const userId = req.user?.userId;
-    if (!userId) throw new Error('User not found');
-    return this.chatService.getMessagesByUser(userId);
-  }
-
+  // ============ CONVERSATION ENDPOINTS ============
   @Get('conversations/:id')
   async getConversation(@Param('id') id: string) {
     return this.chatService.getConversation(id);
@@ -30,24 +26,23 @@ export class ChatController {
     return this.chatService.getMessages(id);
   }
 
-  // THÊM CÁC ENDPOINTS MỚI CHO ANALYTICS VÀ EXAMPLE QA
-  @Get('conversations/:id/analytics')
-  async getConversationAnalytics(@Param('id') id: string) {
-    return this.chatService.getConversationAnalytics(id);
-  }
-
-  @Get('analytics/example-qa')
-  async getExampleQAAnalytics() {
-    return this.chatService.getExampleQAAnalytics();
-  }
-
-  // ENDPOINT ĐỂ TEST EXAMPLE QA MATCHING
-  @Post('test-example-qa')
-  async testExampleQAMatching(@Body() body: { prompt: string }) {
-    const result = await this.chatService.findAnswerFromExampleQA(body.prompt);
+  // ============ USER MESSAGES ============
+  @Get('messages')
+  async getMessagesByUserId(@Request() req: any) {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return {
+        success: false,
+        message: 'User not authenticated',
+        data: []
+      };
+    }
+    
+    const messages = await this.chatService.getMessages(userId);
     return {
       success: true,
-      data: result
+      data: messages
     };
   }
+
 }

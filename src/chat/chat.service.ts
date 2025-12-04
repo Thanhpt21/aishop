@@ -2,1856 +2,1142 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DedupService } from './dedup.service';
 import { OpenAiService } from './openai.service';
-import * as natural from 'natural';
-import { SmartAdjusterService } from './smart-adjuster.service';
 
-interface ProductSearchResult {
+interface MatchedAnswer {
   found: boolean;
-  products: any[];
-  exactMatchProduct?: any;
-  searchQuery: string;
+  answer?: string;
+  question?: string;
+  confidence: number;
+  source: 'exact_match' | 'fuzzy_match' | 'ai_generated';
+  metadata?: any;
+}
+
+interface ConversationContext {
+  lastProducts?: any[];
+  lastQuestion?: string;
+  lastAnswer?: string;
+  productFocus?: string;
+  conversationHistory?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    products?: any[];
+    timestamp?: Date;
+  }>;
 }
 
 @Injectable()
 export class ChatService {
-  private tokenizer: natural.WordTokenizer;
-  private stemmer = {
-  stem: (word: string): string => {
-    // Từ điển mapping từ dạng biến thể → dạng chuẩn (tự bổ sung dần)
-    const synonymMap: Record<string, string> = {
-      'số đo': 'size',
-      'vòng 1': 'size',
-      'vòng ngực': 'size',
-      'vòng eo': 'size',
-      'vòng mông': 'size',
-      'bao nhiêu': 'giá',
-      'giá tiền': 'giá',
-      'mấy giờ': 'giờ làm',
-      'mấyh': 'giờ làm',
-      'mấy giờ mở cửa': 'giờ làm',
-      'đặt hàng': 'mua',
-      'order': 'mua',
-      'đổi trả': 'trả hàng',
-      'hoàn tiền': 'trả hàng',
-    };
+  private conversationContexts: Map<string, ConversationContext> = new Map();
 
-    const lower = word.toLowerCase();
-    return synonymMap[lower] || lower;
-  }
-};
-  
   constructor(
     private prisma: PrismaService,
     private dedup: DedupService,
     private openai: OpenAiService,
-     private smartAdjuster: SmartAdjusterService
-  ) {
-    this.tokenizer = new natural.WordTokenizer();
-  }
+  ) {}
 
-    async handleChat(body: any) {
-    const { conversationId, prompt, metadata, userId } = body;
+  // ============ MAIN HANDLER ============
+  async handleChat(body: any) {
+    const { conversationId, prompt, metadata, userId, ownerEmail } = body;
     if (!prompt?.trim()) throw new Error('prompt required');
 
-    const normalized = this.dedup.normalizePrompt(prompt);
-    const hash = this.dedup.hashPrompt(normalized);
+    // 1. Tạo hoặc lấy conversation
+    const convId = await this.getOrCreateConversation(conversationId, prompt);
 
-    // 1. TẠO HOẶC LẤY CONVERSATION
-    let convId: string;
-    if (conversationId) {
-      convId = conversationId;
-    } else {
-      const conv = await this.prisma.conversation.create({
-        data: {
-          tags: [],
-          title: this.generateConversationTitle(prompt)
-        }
-      });
-      convId = conv.id;
-    }
+    // 2. Lấy context của CHÍNH conversation này
+    const context = await this.getConversationContext(convId);
 
-    const followUpContext = await this.detectFollowUpIntent(prompt, convId);
-  
-    if (followUpContext.isFollowUp && followUpContext.referencedProducts) {
-      return this.handleFollowUpResponse(
-        prompt,
-        convId,
-        followUpContext.followUpType!,
-        followUpContext.referencedProducts
-      );
-    }
+    // 3. Lưu tin nhắn user
+    const userMessage = await this.saveUserMessage(convId, prompt);
 
-    // 2. PHÂN TÍCH PROMPT VÀ TÌM CÂU TRẢ LỜI TỪ EXAMPLE QA
-    const exampleQAAnalysis = await this.findAnswerFromExampleQA(prompt);
+    // 4. TÌM CÂU TRẢ LỜI TỐT NHẤT (với context của conversation này)
+    const matchedAnswer = await this.findBestAnswer(prompt, metadata, context, convId, ownerEmail);
+
+    // 5. Lưu tin nhắn assistant
+    const assistantMessage = await this.saveAssistantMessage(
+      convId,
+      matchedAnswer.answer!,
+      matchedAnswer.source,
+      matchedAnswer.metadata
+    );
+
+    // 6. Cập nhật context CỦA CONVERSATION NÀY
+    this.updateConversationContext(
+      convId,
+      prompt,
+      matchedAnswer.answer!,
+      matchedAnswer.metadata?.products || []
+    );
+
+    // 7. Trả về response
+    const isCached = matchedAnswer.metadata?.cached || false;
+    const products = matchedAnswer.metadata?.products || [];
     
-    // 3. TÌM KIẾM SẢN PHẨM (ƯU TIÊN SAU EXAMPLE QA)
-    const productSearch = await this.findProductsForPrompt(prompt, exampleQAAnalysis);
-
-    // 4. NẾU TÌM THẤY SẢN PHẨM VÀ KHÔNG CÓ EXAMPLE QA MATCH
-    if (productSearch.found && !exampleQAAnalysis.foundMatch && productSearch.confidence >= 0.5) {
-      const productResponse = this.formatProductResponse(productSearch.products, prompt);
-      
-      // Lưu tin nhắn user
-      const userMessage = await this.prisma.message.create({
-        data: {
-          conversationId: convId,
-          role: 'user',
-          content: prompt,
-          source: 'user',
-          intent: 'tim_kiem_san_pham',
-          category: 'san_pham',
-          sentiment: exampleQAAnalysis.sentiment,
-          confidence: productSearch.confidence,
-          isTrainingExample: false,
-          metadata: {
-            searchQuery: productSearch.query,
-            matchedKeywords: productSearch.matchedKeywords,
-            productCount: productSearch.products.length,
-            originalQuestion: prompt
-          }
-        },
-      });
-
-      // Tạo response từ sản phẩm
-      const assistantMessage = await this.prisma.message.create({
-        data: {
-          conversationId: convId,
-          userId: null,
-          role: 'assistant',
-          content: productResponse,
-          source: 'product_search',
-          intent: 'tu_van_san_pham',
-          category: 'san_pham',
-          tokens: this.countWords(productResponse),
-          metadata: {
-            products: productSearch.products.map(p => ({
-              id: p.id,
-              name: p.name,
-              price: p.price,
-              description: p.description,
-              slug: p.slug,
-            })),
-            productIds: productSearch.products.map(p => p.id),
-            query: productSearch.query,
-            confidence: productSearch.confidence,
-            searchMethod: productSearch.method,
-            expectsFollowUp: true,                        
-            followUpType: 'product_detail_confirmation'   
-          }
-        },
-      });
-      return {
-        cached: false,
-        fromExampleQA: false,
-        fromProductSearch: true,
-        conversationId: convId,
-        response: {
-          id: assistantMessage.id,
-          text: productResponse,
-          wordCount: this.countWords(productResponse),
-        },
-        analysis: {
-          ...exampleQAAnalysis,
-          productSearch: {
-            found: true,
-            query: productSearch.query,
-            confidence: productSearch.confidence,
-            products: productSearch.products,
-            matchedKeywords: productSearch.matchedKeywords
-          }
-        },
-        usage: {},
-      };
-    }
-
-    // 5. LƯU TIN NHẮN USER
-    const userMessage = await this.prisma.message.create({
-      data: {
-        conversationId: convId,
-        role: 'user',
-        content: prompt,
-        source: 'user',
-        intent: exampleQAAnalysis.intent,
-        category: exampleQAAnalysis.category,
-        sentiment: exampleQAAnalysis.sentiment,
-        confidence: exampleQAAnalysis.confidence,
-        isTrainingExample: exampleQAAnalysis.isTrainingExample,
-        metadata: {
-          matchedQuestion: exampleQAAnalysis.matchedQuestion,
-          similarity: exampleQAAnalysis.similarity,
-          matchingMethod: exampleQAAnalysis.matchingMethod,
-          originalQuestion: prompt,
-          productSearch: productSearch.found ? {
-            found: true,
-            query: productSearch.query,
-            productCount: productSearch.products.length
-          } : { found: false }
-        }
-      },
-    });
-
-    // 6. NẾU TÌM THẤY CÂU TRẢ LỜI TỪ EXAMPLE QA
-    if (exampleQAAnalysis.foundMatch && exampleQAAnalysis.answer) {
-      let finalAnswer = exampleQAAnalysis.answer;
-
-      if (exampleQAAnalysis.similarity >= 0.7) {
-        try {
-          finalAnswer = await this.smartAdjuster.adjustAnswerWithAI(
-            prompt,
-            exampleQAAnalysis.answer,
-            exampleQAAnalysis.matchedQuestion,
-            exampleQAAnalysis.intent,
-            exampleQAAnalysis.category
-          );
-        } catch (error) {
-          console.error('❌ Failed to adjust answer, using original:', error);
-          finalAnswer = exampleQAAnalysis.answer;
-        }
-      }
-
-      // NẾU CÓ SẢN PHẨM LIÊN QUAN, THÊM VÀO CUỐI CÂU TRẢ LỜI
-      if (productSearch.found && productSearch.confidence >= 0.4) {
-        const productSuggestion = this.getProductSuggestion(productSearch.products, prompt);
-        if (productSuggestion) {
-          finalAnswer += `\n\n${productSuggestion}`;
-        }
-      }
-
-      const limitedAnswer = this.limitWords(finalAnswer, 50);
-
-      const assistantMessage = await this.prisma.message.create({
-        data: {
-          conversationId: convId,
-          userId: null,
-          role: 'assistant',
-          content: limitedAnswer,
-          source: 'example_qa',
-          intent: exampleQAAnalysis.intent,
-          category: exampleQAAnalysis.category,
-          tokens: this.countWords(limitedAnswer),
-          metadata: {
-            originalAnswer: exampleQAAnalysis.answer,
-            adjustedAnswer: finalAnswer,
-            matchedQuestionId: exampleQAAnalysis.matchedQuestionId,
-            confidence: exampleQAAnalysis.confidence,
-            similarity: exampleQAAnalysis.similarity,
-            adjustmentApplied: finalAnswer !== exampleQAAnalysis.answer,
-            productSearch: productSearch.found ? {
-              found: true,
-              products: productSearch.products.map(p => p.id),
-              confidence: productSearch.confidence
-            } : null
-          }
-        },
-      });
-
-      // Tạo training data
-      await this.createTrainingDataFromMessage(userMessage, exampleQAAnalysis);
-
-      return {
-        cached: false,
-        fromExampleQA: true,
-        fromProductSearch: productSearch.found,
-        conversationId: convId,
-        response: {
-          id: assistantMessage.id,
-          text: limitedAnswer,
-          wordCount: this.countWords(limitedAnswer),
-        },
-        analysis: {
-          ...exampleQAAnalysis,
-          answer: limitedAnswer,
-          originalAnswer: exampleQAAnalysis.answer,
-          adjustedAnswer: finalAnswer,
-          adjustmentApplied: finalAnswer !== exampleQAAnalysis.answer,
-          matchingMethod: exampleQAAnalysis.matchingMethod,
-          productSearch: productSearch.found ? {
-            found: true,
-            query: productSearch.query,
-            products: productSearch.products,
-            confidence: productSearch.confidence
-          } : null
-        },
-        usage: {},
-      };
-    }
-
-    // 7. KIỂM TRA CACHE
-    const cached = await this.dedup.checkCache(hash);
-    if (cached) {
-      // Thêm đề xuất sản phẩm nếu có
-      let cachedText = cached.text;
-      if (productSearch.found && productSearch.confidence >= 0.4) {
-        const productSuggestion = this.getProductSuggestion(productSearch.products, prompt);
-        if (productSuggestion) {
-          cachedText += `\n\n${productSuggestion}`;
-        }
-      }
-
-      const limitedCachedText = this.limitWords(cachedText, 50);
-
-      const assistantMessage = await this.prisma.message.create({
-        data: {
-          conversationId: convId,
-          userId: null,
-          role: 'assistant',
-          content: limitedCachedText,
-          source: 'cached',
-          intent: exampleQAAnalysis.intent,
-          category: exampleQAAnalysis.category,
-          tokens: this.countWords(limitedCachedText),
-          metadata: {
-            productSearch: productSearch.found ? {
-              found: true,
-              products: productSearch.products.map(p => p.id),
-              confidence: productSearch.confidence
-            } : null
-          }
-        },
-      });
-
-      return {
-        cached: true,
-        fromExampleQA: false,
-        fromProductSearch: productSearch.found,
-        conversationId: convId,
-        response: {
-          id: assistantMessage.id,
-          text: limitedCachedText,
-          wordCount: this.countWords(limitedCachedText),
-        },
-        analysis: exampleQAAnalysis,
-        usage: {},
-      };
-    }
-
-    // 8. GỌI OPENAI
-    let aiResponse = await this.openai.callOpenAI(prompt, metadata);
-
-    // Thêm thông tin sản phẩm vào AI response nếu có
-    if (productSearch.found && productSearch.confidence >= 0.4) {
-      const productInfo = this.formatProductsForAI(productSearch.products);
-      const enhancedPrompt = `${prompt}\n\nThông tin sản phẩm liên quan:\n${productInfo}`;
-      
-      // Gọi lại OpenAI với thông tin sản phẩm
-      aiResponse = await this.openai.callOpenAI(enhancedPrompt, {
-        ...metadata,
-        hasProductInfo: true,
-        productCount: productSearch.products.length
-      });
-    }
-
-    // 9. LƯU TẤT CẢ TRONG TRANSACTION
-    const result = await this.prisma.$transaction(async (tx) => {
-      const assistantMessage = await tx.message.create({
-        data: {
-          conversationId: convId,
-          userId: null,
-          role: 'assistant',
-          content: aiResponse.text,
-          source: 'openai',
-          intent: exampleQAAnalysis.intent,
-          category: exampleQAAnalysis.category,
-          tokens: this.countWords(aiResponse.text),
-          metadata: {
-            productSearch: productSearch.found ? {
-              found: true,
-              products: productSearch.products.map(p => p.id),
-              confidence: productSearch.confidence,
-              usedInResponse: true
-            } : null
-          }
-        },
-      });
-
-      const resp = await tx.response.upsert({
-        where: { hash },
-        update: {},
-        create: {
-          hash,
-          content: aiResponse.text,
-          usage: aiResponse.usage || {}
-        },
-      });
-
-      await tx.promptHash.create({
-        data: {
-          promptHash: hash,
-          responseId: resp.id,
-          normalizedPrompt: normalized,
-        },
-      });
-
-      await this.dedup.setCache(hash, resp.id);
-
-      return resp;
-    });
-
     return {
-      cached: false,
-      fromExampleQA: false,
-      fromProductSearch: productSearch.found,
+      cached: isCached,
       conversationId: convId,
       response: {
-        id: result.id,
-        text: result.content,
-        wordCount: this.countWords(result.content),
+        id: assistantMessage.id,
+        text: matchedAnswer.answer,
+        source: matchedAnswer.source,
+        confidence: matchedAnswer.confidence,
+        wordCount: this.countWords(matchedAnswer.answer!),
+        products: products,
       },
-      analysis: exampleQAAnalysis,
-      usage: aiResponse.usage || {},
+      usage: isCached ? {} : (matchedAnswer.metadata?.usage || {}),
     };
   }
 
-  // ==================== NÂNG CẤP PRODUCT SEARCH ====================
-
-private async findProductsForPrompt(
-  prompt: string,
-  analysis: any
-): Promise<{
-  found: boolean;
-  products: any[];
-  query: string;
-  confidence: number;
-  matchedKeywords: string[];
-  method: string;
-}> {
-  try {
-    const lowerPrompt = prompt.toLowerCase();
-    
-    // Danh sách từ khóa chỉ tìm sản phẩm
-    const productIntentKeywords = [
-      'có sản phẩm', 'bạn có', 'shop có', 'tìm sản phẩm', 'mua sản phẩm',
-      'giới thiệu sản phẩm', 'sản phẩm nào', 'mặt hàng nào', 'hàng nào',
-      'có bán', 'bán gì', 'có loại', 'có kiểu', 'có mẫu', 'có dòng',
-      'gợi ý sản phẩm', 'sản phẩm gì', 'hãng nào', 'thương hiệu nào'
-    ];
-
-    // Danh sách từ khóa chỉ KHÔNG tìm sản phẩm
-    const nonProductKeywords = [
-      'cách sử dụng', 'hướng dẫn', 'tư vấn size', 'size nào',
-      'giờ làm việc', 'địa chỉ', 'liên hệ', 'chính sách', 'đổi trả',
-      'vận chuyển', 'thanh toán', 'giá cả', 'khuyến mãi', 'mã giảm giá',
-      'tài khoản', 'đăng nhập', 'đăng ký', 'đánh giá', 'feedback',
-      'bảo hành', 'chất lượng', 'xuất xứ', 'nơi sản xuất'
-    ];
-
-    // Kiểm tra nếu prompt KHÔNG phải là tìm sản phẩm
-    const hasNonProductIntent = nonProductKeywords.some(keyword => 
-      lowerPrompt.includes(keyword)
-    );
-
-    if (hasNonProductIntent) {
-      return {
-        found: false,
-        products: [],
-        query: '',
-        confidence: 0,
-        matchedKeywords: [],
-        method: 'non_product_intent'
-      };
+  // ============ CONTEXT MANAGEMENT (PER CONVERSATION) ============
+  private async getConversationContext(conversationId: string): Promise<ConversationContext> {
+    // Kiểm tra cache trước
+    if (this.conversationContexts.has(conversationId)) {
+      return this.conversationContexts.get(conversationId)!;
     }
 
-    // 1. Trích xuất từ khóa sản phẩm từ prompt
-    const keywords = this.extractProductKeywords(prompt);
-    
-    
-    const hasProductIntent = productIntentKeywords.some(k => lowerPrompt.includes(k));
-    
-    if (keywords.length === 0 && !hasProductIntent) {
-      return {
-        found: false,
-        products: [],
-        query: '',
-        confidence: 0,
-        matchedKeywords: [],
-        method: 'no_keywords'
-      };
-    }
-
-    // 2. Tìm kiếm sản phẩm theo độ ưu tiên MỚI
-    let products: any[] = [];
-    let searchMethod = 'keyword';
-    let confidence = 0.3;
-
-    // **ƯU TIÊN 1: Tìm theo tên sản phẩm CHÍNH XÁC HƠN**
-    if (keywords.length > 0) {
-
-      
-      const searchPromises = keywords.map(keyword => {
-        return this.prisma.product.findMany({
-          where: {
-            isActive: true,
-            OR: [
-              { 
-                name: { 
-                  contains: keyword, 
-                  mode: 'insensitive' 
-                } 
-              },
-              { 
-                // Ưu tiên tìm theo từ khóa trong danh mục
-                category: { 
-                  contains: keyword, 
-                  mode: 'insensitive' 
-                } 
-              },
-            ]
-          },
-          take: 5
-        });
-      });
-
-      const results = await Promise.all(searchPromises);
-      results.forEach(found => {
-
-        products.push(...found);
-      });
-      
-      if (products.length > 0) {
-        confidence = 0.7;
-        searchMethod = 'product_name_or_category';
-
-      }
-    }
-
-    // **ƯU TIÊN 2: Tìm theo description (chỉ khi không tìm thấy theo name/category)**
-    if (products.length === 0 && keywords.length > 0) {
-
-      
-      const descriptionPromises = keywords.map(keyword => {
-        return this.prisma.product.findMany({
-          where: {
-            isActive: true,
-            description: { 
-              contains: keyword, 
-              mode: 'insensitive' 
-            }
-          },
-          take: 3
-        });
-      });
-
-      const descriptionResults = await Promise.all(descriptionPromises);
-      descriptionResults.forEach(found => {
-        products.push(...found);
-      });
-      
-      if (products.length > 0) {
-        confidence = 0.5; // Confidence thấp hơn vì match trong description
-        searchMethod = 'product_description';
-      }
-    }
-
-    // **ƯU TIÊN 3: Nếu có intent là tìm sản phẩm nhưng không có keyword cụ thể**
-    if (products.length === 0 && hasProductIntent) {
-      
-      products = await this.prisma.product.findMany({
-        where: { isActive: true },
-        take: 5,
-        orderBy: { createdAt: 'desc' }
-      });
-      
-      if (products.length > 0) {
-        confidence = 0.6;
-        searchMethod = 'general_product_query';
-
-      }
-    }
-
-    // **ƯU TIÊN 4: Tìm theo category từ intent analysis**
-    if (products.length === 0 && analysis.category && analysis.category !== 'general') {
-
-      
-      products = await this.prisma.product.findMany({
-        where: {
-          isActive: true,
-          OR: [
-            { category: { contains: analysis.category, mode: 'insensitive' } },
-          ]
-        },
-        take: 3
-      });
-      
-      if (products.length > 0) {
-        confidence = 0.5;
-        searchMethod = 'category_match';
-
-      }
-    }
-
-    // 3. SCORING và SẮP XẾP THÔNG MINH
-
-    
-    // Tính điểm cho từng sản phẩm
-    const scoredProducts = products.map(product => {
-      const score = this.calculateProductScore(product, keywords, lowerPrompt);
-      return { ...product, score };
+    // Lấy lịch sử TỪ CHÍNH conversationId NÀY
+    const messages = await this.prisma.message.findMany({
+      where: { 
+        conversationId: conversationId
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 8,
     });
 
-    // Debug: log tất cả sản phẩm và điểm số
+    console.log(`📝 Loaded ${messages.length} messages for conversation ${conversationId}`);
 
-
-    // Sắp xếp theo score giảm dần
-    scoredProducts.sort((a, b) => b.score - a.score);
-
-    // ==================== LOGIC MỚI: CHỈ LẤY SẢN PHẨM CHẤT LƯỢNG CAO ====================
-    // Chỉ lấy sản phẩm có điểm cao (ngưỡng 8 điểm)
-    const highQualityProducts = scoredProducts
-      .filter(p => p.score >= 8)
-      .slice(0, 3); // Tối đa 3
-
-    // Nếu không có sản phẩm điểm cao, lấy 1 sản phẩm tốt nhất
-    const finalProducts = highQualityProducts.length > 0 
-      ? highQualityProducts 
-      : scoredProducts.slice(0, 1);
-
-    // Loại bỏ trùng lặp theo ID
-    const uniqueProducts = Array.from(
-      new Map(finalProducts.map(p => [p.id, p])).values()
-    );
-
-
-    // Điều chỉnh confidence dựa trên số lượng và chất lượng kết quả
-    let finalConfidence = confidence;
-    if (uniqueProducts.length > 0) {
-      // Tăng confidence nếu có sản phẩm match tốt
-      const averageScore = uniqueProducts.reduce((sum, p) => sum + (p.score || 0), 0) / uniqueProducts.length;
-      
-      if (averageScore >= 10) {
-        finalConfidence = Math.min(confidence + 0.3, 0.95);
-      } else if (averageScore >= 8) {
-        finalConfidence = Math.min(confidence + 0.25, 0.9);
-      } else if (averageScore >= 5) {
-        finalConfidence = Math.min(confidence + 0.15, 0.85);
-      } else if (averageScore >= 3) {
-        finalConfidence = Math.min(confidence + 0.1, 0.8);
-      }
-      
-      // Tăng confidence nếu có exact match
-      const hasExactNameMatch = uniqueProducts.some(p => 
-        keywords.some(kw => p.name.toLowerCase().includes(kw.toLowerCase()))
-      );
-      
-      if (hasExactNameMatch) {
-        finalConfidence = Math.max(finalConfidence, 0.85);
-      }
-      
-      // Giảm confidence nếu chỉ có 1 sản phẩm và điểm thấp
-      if (uniqueProducts.length === 1 && uniqueProducts[0].score < 5) {
-        finalConfidence = Math.max(0.4, finalConfidence - 0.1);
-      }
-    } else {
-      // Không có sản phẩm phù hợp
-      finalConfidence = 0.1;
-    }
-
-    return {
-      found: uniqueProducts.length > 0,
-      products: uniqueProducts,
-      query: keywords.join(', '),
-      confidence: finalConfidence,
-      matchedKeywords: keywords,
-      method: searchMethod
+    const context: ConversationContext = {
+      conversationHistory: messages.map(msg => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+        products: (msg.metadata as any)?.products || [],
+        timestamp: msg.createdAt
+      }))
     };
 
-  } catch (error) {
-    console.error('❌ [Product Search] Error searching products:', error);
-    return {
-      found: false,
-      products: [],
-      query: '',
-      confidence: 0,
-      matchedKeywords: [],
-      method: 'error'
-    };
-  }
-}
-
-private calculateProductScore(product: any, keywords: string[], lowerPrompt: string): number {
-  const productName = product.name.toLowerCase();
-  const productCategory = (product.category || '').toLowerCase();
-  const productDescription = (product.description || '').toLowerCase();
-  
-  let score = 0;
-  
-  // Kiểm tra từng keyword
-  keywords.forEach(keyword => {
-    const kw = keyword.toLowerCase();
+    // Tìm tin nhắn assistant gần nhất TRONG CONVERSATION NÀY
+    const assistantMessages = messages.filter(m => m.role === 'assistant');
+    const lastAssistantMsg = assistantMessages[assistantMessages.length - 1];
     
-    // 1. Exact match trong tên (quan trọng nhất - 6 điểm)
-    if (productName === kw) {
-      score += 6;
-
-    }
-    
-    // 2. Phần của tên chứa keyword (5 điểm)
-    else if (productName.includes(kw)) {
-      score += 5;
-
-    }
-    
-    // 3. Match trong category (4 điểm)
-    if (productCategory.includes(kw)) {
-      score += 4;
-
-    }
-    
-    // 4. Match trong description (2 điểm - giảm xuống)
-    if (productDescription.includes(kw)) {
-      score += 2;
-
-    }
-    
-    // 5. Bonus cho từ ghép trong description
-    if (kw.includes(' ') && productDescription.includes(kw)) {
-      score += 3; // Thêm điểm cho match cụm từ
-
-    }
-  });
-  
-  // Bonus cho match giới tính
-  if (lowerPrompt.includes('nam') && productName.includes('nam')) {
-    score += 3;
-
-  }
-  if (lowerPrompt.includes('nữ') && productName.includes('nữ')) {
-    score += 3;
-
-  }
-  
-  // Bonus cho sản phẩm mới (tạo trong 30 ngày)
-  if (product.createdAt) {
-    const daysOld = (new Date().getTime() - new Date(product.createdAt).getTime()) / (1000 * 3600 * 24);
-    if (daysOld < 30) {
-      score += 1;
-
-    }
-  }
-  
-  // Bonus cho sản phẩm có giá tốt (dưới 200k)
-  if (product.price < 200000) {
-    score += 1;
-
-  }
-  
-  return score;
-}
-private extractProductKeywords(text: string): string[] {
-  const lowerText = text.toLowerCase();
-  
-  // Từ điển từ khóa sản phẩm đầy đủ hơn
-  const productKeywords = [
-    // Quần
-    'quần', 'quần jogger', 'quần jean', 'quần tây', 'quần short', 'quần kaki', 
-    'quần legging', 'quần yếm', 'quần đùi', 'quần dài', 'quần lửng',
-    
-    // Áo
-    'áo', 'áo thun', 'áo sơ mi', 'áo khoác', 'áo len', 'áo vest', 'áo hoodie',
-    'áo tanktop', 'áo ba lỗ', 'áo cổ tròn', 'áo cổ tim', 'áo polo', 'áo ba lỗ',
-    'áo tay dài', 'áo tay ngắn',
-    
-    // Váy đầm
-    'váy', 'đầm', 'váy ngắn', 'váy dài', 'váy xòe', 'váy ôm', 'đầm body',
-    'đầm suông', 'đầm xòe', 'đầm công sở',
-    
-    // Giày dép
-    'giày', 'dép', 'giày thể thao', 'giày cao gót', 'giày bata', 'sandal',
-    'giày lười', 'giày boots', 'giày công sở', 'giày chạy bộ',
-    
-    // Phụ kiện
-    'túi', 'ví', 'balo', 'túi xách', 'mũ', 'nón', 'kính', 'thắt lưng',
-    'vòng', 'nhẫn', 'bông tai', 'khăn', 'tất', 'vớ', 'thắt lưng'
-  ];
-
-  // Từ cần loại bỏ
-  const stopWords = new Set([
-    'có', 'bán', 'shop', 'bạn', 'tôi', 'muốn', 'cần', 'tìm', 'mua',
-    'sản phẩm', 'mặt hàng', 'hàng hóa', 'loại', 'kiểu', 'mẫu', 'dòng',
-    'nào', 'gì', 'không', 'vậy', 'ạ', 'cho', 'hỏi', 'về', 'bao nhiêu',
-    'như thế nào', 'kích thước', 'size', 'số đo', 'màu sắc', 'màu',
-    'chất liệu', 'xuất xứ', 'hãng', 'thương hiệu', 'giá', 'tiền'
-  ]);
-
-  // Tách từ
-  const tokens = lowerText.split(/[\s,.!?]+/);
-  
-  // Lọc từ khóa sản phẩm
-  const singleKeywords = tokens.filter(token => {
-    if (token.length <= 1 || stopWords.has(token)) {
-      return false;
-    }
-    
-    // Kiểm tra xem token có phải là từ khóa sản phẩm không
-    return productKeywords.some(kw => 
-      kw === token || kw.includes(token) || token.includes(kw)
-    );
-  });
-
-  // Thêm từ ghép
-  const compoundKeywords: string[] = [];
-  for (let i = 0; i < tokens.length - 1; i++) {
-    const compound = `${tokens[i]} ${tokens[i + 1]}`;
-    if (productKeywords.includes(compound)) {
-      compoundKeywords.push(compound);
-    }
-  }
-
-  // Kết hợp và loại bỏ trùng lặp
-  const allKeywords = [...new Set([...singleKeywords, ...compoundKeywords])];
-  
-  // Ưu tiên từ ghép trước
-  const sortedKeywords = [
-    ...compoundKeywords,
-    ...singleKeywords.filter(kw => !compoundKeywords.some(ckw => ckw.includes(kw)))
-  ];
-
-
-  return sortedKeywords;
-}
-
-private formatProductResponse(products: any[], prompt: string): string {
-  if (products.length === 0) {
-    return 'Hiện tại shop chưa có sản phẩm phù hợp với yêu cầu của bạn.';
-  }
-
-  const productList = products.map((p, i) => {
-    const slug = p.slug || '';
-    const description = p.description || '';
-    
-    // Tạo mô tả ngắn
-    let shortDescription = '';
-    if (description) {
-      shortDescription = description.length > 60 
-        ? description.substring(0, 60) + '...' 
-        : description;
-    }
-    
-    // Tạo dòng sản phẩm với bullet và slug ở cuối
-    let item = `- ${i + 1}. ${p.name} - ${this.formatPrice(p.price)}`;
-    
-    if (shortDescription) {
-      item += `\n   📝 ${shortDescription}`;
-    }
-    
-    // Thêm slug vào cuối mỗi sản phẩm
-    item += ` \`${slug}\``;
-    
-    return item;
-  }).join('\n\n');
-  
-  if (products.length === 1) {
-    return `Tìm thấy sản phẩm:\n${productList}`;
-  } else {
-    return `Tìm thấy ${products.length} sản phẩm phù hợp:\n${productList}`;
-  }
-}
-  private getProductSuggestion(products: any[], prompt: string): string | null {
-    if (products.length === 0) return null;
-
-    const lowerPrompt = prompt.toLowerCase();
-    
-    // Kiểm tra xem prompt có phải về sản phẩm không
-    const isProductRelated = [
-      'size', 'số đo', 'vòng', 'mặc', 'mặc đẹp', 'phù hợp',
-      'phối đồ', 'mix đồ', 'kết hợp', 'outfit'
-    ].some(keyword => lowerPrompt.includes(keyword));
-
-    if (!isProductRelated) return null;
-
-    // Chọn sản phẩm có giá tốt nhất hoặc phù hợp nhất
-    const bestProduct = products[0]; // Sản phẩm đầu tiên từ kết quả tìm kiếm
-
-    if (lowerPrompt.includes('size') || lowerPrompt.includes('số đo')) {
-      return `💡 **Gợi ý:** Nếu bạn đang tìm size phù hợp, sản phẩm **${bestProduct.name}** có thể là lựa chọn tốt với giá ${this.formatPrice(bestProduct.price)}.`;
-    }
-
-    if (lowerPrompt.includes('mặc đẹp') || lowerPrompt.includes('phối đồ')) {
-      return `👗 **Gợi ý phối đồ:** Bạn có thể tham khảo sản phẩm **${bestProduct.name}** để mix đồ đẹp hơn.`;
-    }
-
-    return `🛍️ **Gợi ý sản phẩm:** ${bestProduct.name} - ${this.formatPrice(bestProduct.price)}`;
-  }
-
-  private formatProductsForAI(products: any[]): string {
-    return products.map((product, index) => {
-      return `Sản phẩm ${index + 1}:
-- Tên: ${product.name}
-- Giá: ${this.formatPrice(product.price)}
-- Danh mục: ${product.category || 'Không có'}
-- Mô tả: ${product.description || 'Không có mô tả'}
-- Tags: ${(product.tags || []).join(', ')}`;
-    }).join('\n\n');
-  }
-
-  private formatPrice(price: number): string {
-    return new Intl.NumberFormat('vi-VN', {
-      style: 'currency',
-      currency: 'VND'
-    }).format(price);
-  }
-
-private async detectFollowUpIntent(
-  prompt: string,
-  conversationId: string
-): Promise<{
-  isFollowUp: boolean;
-  followUpType?: string;
-  referencedProducts?: any[];
-}> {
-  const lowerPrompt = prompt.toLowerCase().trim();
-  
-  
-  // Từ khóa cho mọi loại follow-up (kết hợp cả xác nhận và yêu cầu chi tiết)
-  const followUpKeywords = [
-    'có', 'được', 'ok', 'oke', 'yes', 'ừ', 'uhm', 
-    'đồng ý', 'muốn', 'chi tiết', 'thông tin thêm',
-    'cho tôi biết thêm', 'nói thêm', 'mô tả',
-    'cho tui', 'cho em', 'cho mình', 'cho anh',
-    'thông tin chi tiết', 'giới thiệu kỹ hơn',
-    'kể thêm', 'nói kỹ', 'mô tả chi tiết',
-    'về', 'áo', 'quần', 'sản phẩm' // Thêm từ chung về sản phẩm
-  ];
-  
-  // Các từ khóa từ chối "không"
-  const rejectionKeywords = [
-    'không', 'thôi', 'không cần', 'ko', 'no',
-    'để sau', 'không muốn', 'khỏi'
-  ];
-  
-  const isFollowUpRequest = followUpKeywords.some(kw => lowerPrompt.includes(kw));
-  const isRejection = rejectionKeywords.some(kw => lowerPrompt.includes(kw));
-  
-  if (!isFollowUpRequest && !isRejection) {
-    return { isFollowUp: false };
-  }
-  
-  // Lấy tin nhắn cuối cùng của assistant
-  const lastAssistantMessage = await this.prisma.message.findFirst({
-    where: { 
-      conversationId,
-      role: 'assistant'
-    },
-    orderBy: { createdAt: 'desc' }
-  });
-  
-  if (!lastAssistantMessage || !lastAssistantMessage.metadata) {
-    return { isFollowUp: false };
-  }
-  
-  const metadata = lastAssistantMessage.metadata as any;
-
-  
-  // Kiểm tra nếu tin nhắn trước có expectsFollowUp
-  if (metadata.expectsFollowUp === true) {
-    let referencedProducts = [];
-    
-    // Ưu tiên lấy sản phẩm từ metadata
-    if (metadata.products && metadata.products.length > 0) {
-      referencedProducts = metadata.products;
-    } 
-    // Nếu không có trong metadata, thử tìm từ content
-    else if (lastAssistantMessage.content) {
-      // Trích xuất tên sản phẩm từ content
-      const productNames = this.extractProductNamesFromMessage(lastAssistantMessage.content);
-      
-      if (productNames.length > 0) {
-        // Tìm sản phẩm phù hợp
-        for (const productName of productNames) {
-          const product = await this.prisma.product.findFirst({
-            where: {
-              name: {
-                contains: productName,
-                mode: 'insensitive'
-              }
-            }
-          });
-          
-          if (product && !referencedProducts.some(p => p.id === product.id)) {
-            referencedProducts.push({
-              id: product.id,
-              name: product.name,
-              price: product.price,
-              description: product.description
-            });
-          }
-        }
-        
-
+    if (lastAssistantMsg) {
+      const metadata = lastAssistantMsg.metadata as any;
+      if (metadata?.products?.length > 0) {
+        context.lastProducts = metadata.products;
+        context.productFocus = metadata.products[0].id;
       }
+      context.lastAnswer = lastAssistantMsg.content;
     }
+
+    // Tìm tin nhắn user gần nhất TRONG CONVERSATION NÀY
+    const userMessages = messages.filter(m => m.role === 'user');
+    const lastUserMsg = userMessages[userMessages.length - 1];
     
-    if (isFollowUpRequest) {
-      return {
-        isFollowUp: true,
-        followUpType: 'product_detail_request',
-        referencedProducts: referencedProducts.length > 0 ? referencedProducts : []
-      };
+    if (lastUserMsg) {
+      context.lastQuestion = lastUserMsg.content;
     }
+
+    // Lưu vào cache
+    this.conversationContexts.set(conversationId, context);
     
-    if (isRejection) {
-      return {
-        isFollowUp: true,
-        followUpType: 'product_detail_rejection',
-        referencedProducts: []
-      };
-    }
+    console.log(`✅ Context loaded for conversation ${conversationId}:`, {
+      hasLastProducts: !!context.lastProducts?.length,
+      lastQuestion: context.lastQuestion?.substring(0, 50),
+      historyLength: context.conversationHistory?.length
+    });
+
+    return context;
   }
-  
 
-  return { isFollowUp: false };
-}
+  private updateConversationContext(
+    conversationId: string, 
+    userMessage: string, 
+    assistantMessage: string, 
+    products: any[]
+  ) {
+    const context = this.conversationContexts.get(conversationId) || {
+      conversationHistory: []
+    };
+    
+    // Cập nhật context mới nhất
+    context.lastQuestion = userMessage;
+    context.lastAnswer = assistantMessage;
+    context.lastProducts = products;
+    
+    if (products.length > 0) {
+      context.productFocus = products[0].id;
+    }
 
-// Thêm phương thức trích xuất tên sản phẩm từ tin nhắn
-private extractProductNamesFromMessage(content: string): string[] {
-  // Tìm các tên sản phẩm trong định dạng **Tên sản phẩm**
-  const productNameRegex = /\*\*([^*]+)\*\*/g;
-  const matches = content.match(productNameRegex);
-  
-  if (!matches) return [];
-  
-  return matches.map(match => match.replace(/\*\*/g, '').trim());
-}
-private async handleFollowUpResponse(
-  prompt: string,
-  conversationId: string,
-  followUpType: string,
-  referencedProducts: any[]
-): Promise<any> {
-  
-  // Lưu tin nhắn user
-  const userMessage = await this.prisma.message.create({
-    data: {
-      conversationId,
+    // Thêm vào lịch sử
+    if (!context.conversationHistory) {
+      context.conversationHistory = [];
+    }
+    
+    context.conversationHistory.push({
       role: 'user',
-      content: prompt,
-      source: 'user',
-      intent: 'follow_up_response',
-      category: 'san_pham',
-      sentiment: 'positive',
-      confidence: 0.9,
-      metadata: {
-        followUpType,
-        referencedProductIds: referencedProducts.map(p => p.id)
-      }
-    }
-  });
-
-  let responseText = '';
-
-  if (followUpType === 'product_detail_request') {
-    // User muốn biết chi tiết
-    let targetProduct = referencedProducts[0];
-    
-    // Nếu có nhiều sản phẩm, kiểm tra xem user muốn sản phẩm nào
-    if (referencedProducts.length > 1) {
-      const lowerPrompt = prompt.toLowerCase();
-      const targetProductName = referencedProducts.find(p => 
-        lowerPrompt.includes(p.name.toLowerCase())
-      );
-      
-      if (targetProductName) {
-        targetProduct = targetProductName;
-      }
-    }
-    
-    // Lấy thông tin đầy đủ từ database
-    const fullProduct = await this.prisma.product.findUnique({
-      where: { id: targetProduct.id }
+      content: userMessage,
+      timestamp: new Date()
     });
     
-    if (!fullProduct) {
-      responseText = `Xin lỗi, không tìm thấy thông tin chi tiết về sản phẩm này.`;
-    } else {
-      responseText = this.formatProductDetail(fullProduct);
-    }
-
-  } else if (followUpType === 'product_detail_rejection') {
-    // User không muốn biết chi tiết
-    responseText = `Không sao ạ! Nếu bạn cần tìm sản phẩm khác hoặc có thắc mắc gì, cứ hỏi tôi nhé! 😊`;
-  }
-
-  // Lưu tin nhắn assistant
-  const assistantMessage = await this.prisma.message.create({
-    data: {
-      conversationId,
-      userId: null,
+    context.conversationHistory.push({
       role: 'assistant',
-      content: responseText,
-      source: 'follow_up_handler',
-      intent: 'tu_van_chi_tiet',
-      category: 'san_pham',
-      tokens: this.countWords(responseText),
-      metadata: {
-        followUpType,
-        productDetailsProvided: followUpType === 'product_detail_request',
-        referencedProducts: referencedProducts.map(p => ({ id: p.id, name: p.name }))
-      }
-    }
-  });
-
-  return {
-    cached: false,
-    fromExampleQA: false,
-    fromProductSearch: false,
-    isFollowUp: true,
-    conversationId,
-    response: {
-      id: assistantMessage.id,
-      text: responseText,
-      wordCount: this.countWords(responseText)
-    },
-    analysis: {
-      intent: 'follow_up_response',
-      category: 'san_pham',
-      followUpType,
-      referencedProducts
-    },
-    usage: {}
-  };
-}
-
-private formatProductDetail(product: any): string {
-  let response = `**${product.name}**\n\n`;
-  
-  response += `💰 **Giá:** ${this.formatPrice(product.price)}\n`;
-  
-  if (product.category) {
-    response += `📂 **Danh mục:** ${product.category}\n`;
-  }
-  
-  if (product.brand) {
-    response += `🏷️ **Thương hiệu:** ${product.brand}\n`;
-  }
-  
-  if (product.description) {
-    response += `\n📝 **Mô tả:** ${product.description}\n`;
-  }
-  
-  // Thông tin kích thước nếu có
-  if (product.weight || product.length || product.width || product.height) {
-    response += `\n📏 **Thông số kỹ thuật:**\n`;
-    if (product.weight) response += `- Trọng lượng: ${product.weight} kg\n`;
-    if (product.length && product.width && product.height) {
-      response += `- Kích thước: ${product.length}cm × ${product.width}cm × ${product.height}cm\n`;
-    }
-  }
-  
-  // Câu hỏi tiếp theo
-  response += `\nBạn có muốn biết về chính sách đổi trả, vận chuyển hoặc cách đặt hàng không?`;
-  
-  return response;
-}
-  // ==================== NÂNG CẤP EXAMPLE QA MATCHING ====================
-
-async findAnswerFromExampleQA(prompt: string): Promise<any> {
-  try {
-    const exampleQAs = await this.prisma.exampleQA.findMany({
-      where: { isActive: true }
+      content: assistantMessage,
+      products: products,
+      timestamp: new Date()
     });
 
-    if (exampleQAs.length === 0) {
-      return this.advancedPromptAnalysis(prompt);
+    // Giữ chỉ 10 tin nhắn gần nhất (5 cặp Q-A)
+    if (context.conversationHistory.length > 10) {
+      context.conversationHistory = context.conversationHistory.slice(-10);
     }
 
-    // Tìm match với nhiều phương pháp khác nhau
-    const matches = await this.findSimilarQuestionsAdvanced(prompt, exampleQAs);
+    this.conversationContexts.set(conversationId, context);
     
-    if (matches.length > 0) {
-      // Lấy match tốt nhất
-      const bestMatch = matches[0];
-      
-      // Ngưỡng similarity giảm xuống 0.5 để bắt được nhiều hơn
-      if (bestMatch.similarity >= 0.5) {
-        // Lấy intent và category từ ExampleQA (KHÔNG từ prompt analysis)
+    console.log(`🔄 Context updated for conversation ${conversationId}`);
+  }
+
+  // ============ TÌM CÂU TRẢ LỜI TỐT NHẤT (VỚI CONTEXT ĐÚNG CONVERSATION) ============
+  private async findBestAnswer(
+    prompt: string, 
+    metadata?: any,
+    context?: ConversationContext,
+    conversationId?: string,
+    ownerEmail?: string
+  ): Promise<MatchedAnswer> {
+    
+    const normalized = this.normalizeText(prompt);
+    
+    console.log(`🔍 [${conversationId}] Finding answer for: "${prompt.substring(0, 50)}..."`, {
+      hasContext: !!context?.lastProducts,
+      contextProducts: context?.lastProducts?.length || 0,
+      ownerEmail: ownerEmail
+    });
+
+    // ============ KIỂM TRA SLUG TRONG PROMPT ============
+    const extractedSlug = this.extractSlugFromPrompt(prompt);
+    if (extractedSlug) {
+      console.log(`🏷️  [${conversationId}] Detected slug in prompt: "${extractedSlug}"`);
+      const productBySlug = await this.findProductBySlug(extractedSlug, ownerEmail);
+      if (productBySlug) {
+        console.log(`✅ [${conversationId}] Found product by slug: "${productBySlug.name}"`);
+        
+        // Tạo prompt mới thêm thông tin sản phẩm vào
+        const enhancedPrompt = `${prompt}\n\n[SẢN PHẨM: ${productBySlug.name}]`;
+        const generatedPrompt = this.createPromptForAI(enhancedPrompt, productBySlug);
+        console.log(`💬 Generated prompt with product slug:\n${generatedPrompt}`);
+        
+        const aiResponse = await this.generateProductDetailAnswer(
+          enhancedPrompt, 
+          productBySlug, 
+          metadata, 
+          context
+        );
+        
         return {
-          foundMatch: true,
-          answer: bestMatch.answer,
-          matchedQuestion: bestMatch.question,
-          matchedQuestionId: bestMatch.id,
-          similarity: bestMatch.similarity,
-          intent: bestMatch.intent || 'other', // Lấy từ ExampleQA
-          category: bestMatch.category || 'general', // Lấy từ ExampleQA
-          sentiment: 'positive',
-          confidence: bestMatch.similarity,
-          isTrainingExample: true,
-          modelUsed: 'advanced_example_qa_matching',
-          matchingMethod: bestMatch.method,
-          matchedTags: bestMatch.matchedTags || [],
-          scores: bestMatch.scores
+          found: true,
+          answer: aiResponse.text,
+          confidence: 0.95,
+          source: 'ai_generated',
+          metadata: { 
+            cached: false,
+            usage: aiResponse.usage || {},
+            products: aiResponse.products || []
+          },
         };
       }
     }
 
-    // Nếu không tìm thấy match, trả về analysis từ prompt
-    const promptAnalysis = this.advancedPromptAnalysis(prompt);
-    return {
-      foundMatch: false,
-      answer: null,
-      matchedQuestion: null,
-      similarity: 0,
-      ...promptAnalysis
-    };
-
-  } catch (error) {
-    console.error('Error finding answer from ExampleQA:', error);
-    const promptAnalysis = this.advancedPromptAnalysis(prompt);
-    return {
-      foundMatch: false,
-      answer: null,
-      ...promptAnalysis
-    };
-  }
-}
-
-private async findSimilarQuestionsAdvanced(userQuestion: string, exampleQAs: any[]): Promise<any[]> {
-  const normalizedUserQuestion = this.advancedNormalizeText(userQuestion);
-  const userKeywords = this.extractKeywords(normalizedUserQuestion);
-  
-  const matches = [];
-
-  for (const example of exampleQAs) {
-    const normalizedExampleQuestion = this.advancedNormalizeText(example.question);
-    const exampleKeywords = this.extractKeywords(normalizedExampleQuestion);
-    const exampleTags = example.tags || [];
-
-    // 1. Cosine similarity
-    const cosineSimilarityScore = this.calculateCosineSimilarity(
-      normalizedUserQuestion,
-      normalizedExampleQuestion
-    );
-
-    // 2. Jaccard similarity với stemming
-    const jaccardScore = this.calculateJaccardSimilarityWithStemming(
-      normalizedUserQuestion,
-      normalizedExampleQuestion
-    );
-
-    // 3. Keyword overlap (quan trọng nhất)
-    const keywordOverlapScore = this.calculateKeywordOverlap(
-      userKeywords,
-      exampleKeywords
-    );
-
-    // 4. String similarity (đơn giản)
-    const stringSimilarityScore = this.calculateStringSimilarity(
-      normalizedUserQuestion,
-      normalizedExampleQuestion
-    );
-
-    // 5. Phrase matching (tìm cụm từ giống nhau)
-    const phraseMatchScore = this.calculatePhraseMatching(
-      userQuestion,
-      example.question
-    );
-
-    // Kết hợp scores - TĂNG weight cho keyword và phrase matching
-    const combinedScore = (
-      cosineSimilarityScore * 0.15 +
-      jaccardScore * 0.20 +
-      keywordOverlapScore * 0.35 + // Tăng weight cho keyword
-      stringSimilarityScore * 0.15 +
-      phraseMatchScore * 0.15 // Thêm phrase matching
-    );
-
-
-    // Giảm threshold xuống 0.3 để bắt nhiều hơn
-    if (combinedScore > 0.3) {
-      matches.push({
-        ...example,
-        similarity: combinedScore,
-        scores: {
-          cosineSimilarity: cosineSimilarityScore,
-          jaccard: jaccardScore,
-          keywordOverlap: keywordOverlapScore,
-          stringSimilarity: stringSimilarityScore,
-          phraseMatch: phraseMatchScore
-        },
-        method: 'combined',
-        matchedTags: this.findMatchingTags(userKeywords, exampleTags)
-      });
-    }
-  }
-
-  // Sắp xếp theo similarity giảm dần
-  return matches.sort((a, b) => b.similarity - a.similarity);
-}
-
-private extractPhrases(text: string): string[] {
-  // Các cụm từ quan trọng trong tiếng Việt
-  const importantPhrases = [
-    'size chuẩn việt nam',
-    'size âu mỹ', 
-    'size âu',
-    'size mỹ',
-    'chuẩn việt nam',
-    'chuẩn âu mỹ',
-    'tư vấn size',
-    'số đo 3 vòng',
-    'vòng ngực',
-    'vòng eo',
-    'vòng mông',
-    'giờ làm việc',
-    'đăng ký tài khoản',
-    'trả hàng',
-    'đổi trả',
-    'hoàn tiền'
-  ];
-  
-  const foundPhrases: string[] = [];
-  
-  for (const phrase of importantPhrases) {
-    if (text.includes(phrase)) {
-      foundPhrases.push(phrase);
-    }
-  }
-  
-  return foundPhrases;
-}
-
-private calculatePhraseMatching(str1: string, str2: string): number {
-  const phrases1 = this.extractPhrases(str1.toLowerCase());
-  const phrases2 = this.extractPhrases(str2.toLowerCase());
-  
-  if (phrases1.length === 0 || phrases2.length === 0) return 0;
-  
-  const commonPhrases = phrases1.filter(phrase1 => 
-    phrases2.some(phrase2 => 
-      phrase2.includes(phrase1) || phrase1.includes(phrase2)
-    )
-  );
-  
-  return commonPhrases.length / Math.max(phrases1.length, phrases2.length);
-}
-
-// Thay thế Levenshtein bằng string similarity đơn giản hơn
-private calculateStringSimilarity(str1: string, str2: string): number {
-  // Đơn giản hóa: so sánh độ dài và ký tự chung
-  const shorter = str1.length < str2.length ? str1 : str2;
-  const longer = str1.length < str2.length ? str2 : str1;
-  
-  if (shorter.length === 0) return longer.length === 0 ? 1 : 0;
-  
-  // Tính % ký tự giống nhau
-  let matchingChars = 0;
-  for (let i = 0; i < shorter.length; i++) {
-    if (longer.includes(shorter[i])) {
-      matchingChars++;
-    }
-  }
-  
-  return matchingChars / Math.max(str1.length, str2.length);
-}
-
-// Thêm phương thức get common keywords cho debug
-private getCommonKeywords(keywords1: string[], keywords2: string[]): string[] {
-  const set1 = new Set(keywords1);
-  const set2 = new Set(keywords2);
-  return [...set1].filter(keyword => set2.has(keyword));
-}
-
-
-  private calculateCosineSimilarity(str1: string, str2: string): number {
-    // Tạo vector từ vựng
-    const tokens1 = this.tokenizer.tokenize(str1);
-    const tokens2 = this.tokenizer.tokenize(str2);
-    
-    const allTokens = [...new Set([...tokens1, ...tokens2])];
-    
-    // Tạo vector tần suất
-    const vector1 = allTokens.map(token => 
-      tokens1.filter(t => t === token).length
-    );
-    const vector2 = allTokens.map(token => 
-      tokens2.filter(t => t === token).length
-    );
-    
-    // Tính cosine similarity
-    const dotProduct = vector1.reduce((sum, val, i) => sum + val * vector2[i], 0);
-    const magnitude1 = Math.sqrt(vector1.reduce((sum, val) => sum + val * val, 0));
-    const magnitude2 = Math.sqrt(vector2.reduce((sum, val) => sum + val * val, 0));
-    
-    if (magnitude1 === 0 || magnitude2 === 0) return 0;
-    
-    return dotProduct / (magnitude1 * magnitude2);
-  }
-
-  private calculateJaccardSimilarityWithStemming(str1: string, str2: string): number {
-    const tokens1 = this.tokenizer.tokenize(str1).map(token => this.stemmer.stem(token));
-    const tokens2 = this.tokenizer.tokenize(str2).map(token => this.stemmer.stem(token));
-    
-    const set1 = new Set(tokens1.filter(token => token.length > 1));
-    const set2 = new Set(tokens2.filter(token => token.length > 1));
-    
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    
-    return union.size === 0 ? 0 : intersection.size / union.size;
-  }
-
-  private extractKeywords(text: string): string[] {
-    const lowerText = text.toLowerCase();
-    
-    // Từ cần loại bỏ
-    const stopWords = new Set([
-      'có', 'và', 'là', 'của', 'cho', 'với', 'như', 'từ', 'đến', 'được',
-      'một', 'các', 'hay', 'hoặc', 'nếu', 'thì', 'mà', 'ở', 'trong', 'ngoài',
-      'trên', 'dưới', 'giữa', 'bằng', 'về', 'để', 'khi', 'nào', 'ai', 'gì',
-      'ở đâu', 'tại sao', 'như thế nào', 'bao nhiêu', 'mấy', 'nè', 'ạ', 'vậy'
-    ]);
-
-    // Tách từ theo khoảng trắng (đơn giản hóa)
-    const tokens = lowerText.split(/\s+/).filter(token => 
-      token.length > 1 && !stopWords.has(token)
-    );
-
-    return [...new Set(tokens)]; // Remove duplicates
-  }
-
-  private calculateKeywordOverlap(keywords1: string[], keywords2: string[]): number {
-    const set1 = new Set(keywords1);
-    const set2 = new Set(keywords2);
-    
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    
-    return union.size === 0 ? 0 : intersection.size / union.size;
-  }
-
-
-  private findMatchingTags(userKeywords: string[], tags: string[]): string[] {
-    if (!tags || tags.length === 0) return [];
-    
-    const normalizedTags = tags.map(tag => 
-      this.stemmer.stem(tag.toLowerCase().trim())
-    );
-    
-    const userKeywordsSet = new Set(userKeywords);
-    return tags.filter((tag, index) => userKeywordsSet.has(normalizedTags[index]));
-  }
-
-  private calculateMeasurementSimilarity(str1: string, str2: string): number {
-    // Đặc biệt cho các câu hỏi về số đo
-    const measurements1 = this.extractMeasurements(str1);
-    const measurements2 = this.extractMeasurements(str2);
-    
-    if (measurements1.length === 0 || measurements2.length === 0) {
-      return 0;
-    }
-    
-    // Kiểm tra nếu có cùng pattern số đo (vd: 90-75-95 vs 90-70-95)
-    const patternMatch = this.checkMeasurementPattern(measurements1, measurements2);
-    
-    if (patternMatch) {
-      return 0.9; // Tăng score cho matching số đo
-    }
-    
-    // Nếu có ít nhất một số đo trùng
-    const commonMeasurements = measurements1.filter(m1 => 
-      measurements2.some(m2 => Math.abs(m1 - m2) <= 5)
-    );
-    
-    return commonMeasurements.length / Math.max(measurements1.length, measurements2.length);
-  }
-
-  private hasMeasurements(text: string): boolean {
-    const measurements = this.extractMeasurements(text);
-    return measurements.length >= 2; // Có ít nhất 2 số đo
-  }
-
-  private extractMeasurements(text: string): number[] {
-    // Tìm tất cả các số trong text
-    const matches = text.match(/\d+/g);
-    return matches ? matches.map(m => parseInt(m, 10)) : [];
-  }
-
-  private checkMeasurementPattern(nums1: number[], nums2: number[]): boolean {
-    // Kiểm tra nếu cả hai đều có 3 số (số đo 3 vòng)
-    if (nums1.length >= 3 && nums2.length >= 3) {
-      // So sánh các số đầu tiên (vòng ngực)
-      const chestDiff = Math.abs(nums1[0] - nums2[0]);
-      // So sánh các số thứ ba (vòng mông)
-      const hipDiff = Math.abs(nums1[2] - nums2[2]);
-      
-      // Nếu chênh lệch trong vòng 10cm và có cùng pattern
-      const isPatternMatch = chestDiff <= 10 && hipDiff <= 10;
-      
-      
-      return isPatternMatch;
-    }
-    
-    // Kiểm tra nếu có 2 số đo
-    if (nums1.length >= 2 && nums2.length >= 2) {
-      const firstDiff = Math.abs(nums1[0] - nums2[0]);
-      const secondDiff = Math.abs(nums1[1] - nums2[1]);
-      return firstDiff <= 10 && secondDiff <= 10;
-    }
-    
-    return false;
-  }
-
-  private calculateNormalizedLevenshtein(str1: string, str2: string): number {
-    // Implement Levenshtein distance
-    const len1 = str1.length;
-    const len2 = str2.length;
-    
-    if (len1 === 0) return len2 === 0 ? 1 : 0;
-    if (len2 === 0) return 0;
-    
-    // Tạo matrix
-    const matrix: number[][] = [];
-    for (let i = 0; i <= len1; i++) {
-      matrix[i] = [i];
-    }
-    for (let j = 0; j <= len2; j++) {
-      matrix[0][j] = j;
-    }
-    
-    // Fill matrix
-    for (let i = 1; i <= len1; i++) {
-      for (let j = 1; j <= len2; j++) {
-        const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j] + 1,     // deletion
-          matrix[i][j - 1] + 1,     // insertion
-          matrix[i - 1][j - 1] + cost // substitution
-        );
+    // ============ KIỂM TRA FOLLOW-UP QUESTIONS (CHỈ TRONG CONVERSATION NÀY) ============
+    if (context && conversationId) {
+      const followUpMatch = await this.checkFollowUpQuestion(
+        prompt, 
+        normalized, 
+        context, 
+        conversationId
+      );
+      if (followUpMatch.found) {
+        console.log(`🔄 [${conversationId}] Follow-up question detected`);
+        return followUpMatch;
       }
     }
-    
-    const distance = matrix[len1][len2];
-    const maxLength = Math.max(len1, len2);
-    
-    // Normalize to 0-1 (1 means identical, 0 means completely different)
-    return maxLength === 0 ? 1 : 1 - (distance / maxLength);
+
+    // ============ KIỂM TRA CÂU HỎI SẢN PHẨM CỤ THỂ ============
+    const isProductQuestion = this.isProductQuestion(normalized);
+    if (isProductQuestion) {
+      console.log(`🎯 [${conversationId}] Detected product-specific question`);
+      
+      const specificProduct = await this.findSpecificProduct(normalized, ownerEmail);
+      if (specificProduct) {
+        console.log(`🔍 [${conversationId}] Found specific product: "${specificProduct.name}"`);
+        const aiResponse = await this.generateProductDetailAnswer(
+          prompt, 
+          specificProduct, 
+          metadata, 
+          context
+        );
+        
+        return {
+          found: true,
+          answer: aiResponse.text,
+          confidence: 0.85,
+          source: 'ai_generated',
+          metadata: { 
+            cached: false,
+            usage: aiResponse.usage || {},
+            products: aiResponse.products || []
+          },
+        };
+      } else {
+        // Nếu không tìm được product cụ thể, tìm related products
+        console.log(`🔍 [${conversationId}] Searching for related products...`);
+        const relevantProducts = await this.findRelevantProducts(normalized, ownerEmail);
+        if (relevantProducts.length > 0) {
+          console.log(`✅ [${conversationId}] Found ${relevantProducts.length} related products`);
+          const aiResponse = await this.generateAIAnswerWithUsage(
+            prompt, 
+            normalized, 
+            metadata, 
+            context,
+            ownerEmail
+          );
+          
+          return {
+            found: true,
+            answer: aiResponse.text,
+            confidence: 0.8,
+            source: 'ai_generated',
+            metadata: { 
+              cached: false,
+              usage: aiResponse.usage || {},
+              products: aiResponse.products || []
+            },
+          };
+        }
+      }
+    }
+
+  // ============ GENERATE NEW ANSWER ============
+    console.log(`💬 [${conversationId}] Calling AI...`);
+    const aiResponse = await this.generateAIAnswerWithUsage(
+      prompt, 
+      normalized, 
+      metadata, 
+      context,
+      ownerEmail
+    );
+
+    return {
+      found: true,
+      answer: aiResponse.text,
+      confidence: 0.8,
+      source: 'ai_generated',
+      metadata: { 
+        cached: false,
+        usage: aiResponse.usage || {},
+        products: aiResponse.products || []
+      },
+    };
   }
 
-  private advancedNormalizeText(text: string): string {
+  // ============ CHECK FOLLOW-UP QUESTION (CHỈ XÉT TRONG CONVERSATION HIỆN TẠI) ============
+  private async checkFollowUpQuestion(
+    originalPrompt: string,
+    normalizedPrompt: string,
+    context?: ConversationContext,
+    conversationId?: string
+  ): Promise<MatchedAnswer> {
+    
+    if (!context?.lastProducts?.length) {
+      return { found: false, confidence: 0, source: 'ai_generated' };
+    }
+
+    // Chỉ xét follow-up nếu có sản phẩm đã nói trong conversation này
+    const followUpKeywords = [
+      'nó', 'cái này', 'sản phẩm này', 'áo này', 'quần này', 
+      'cái đó', 'thế còn', 'còn', 'thế', 'vậy',
+      'giá', 'chất liệu', 'size', 'màu', 'có không',
+      'như thế nào', 'ra sao', 'được không', 'thì sao'
+    ];
+
+    const keywords = this.extractKeywords(normalizedPrompt);
+    const isFollowUp = keywords.some(kw => 
+      followUpKeywords.some(followUp => kw.includes(followUp))
+    ) || normalizedPrompt.length < 20;
+
+    if (!isFollowUp) {
+      return { found: false, confidence: 0, source: 'ai_generated' };
+    }
+
+    console.log(`🔄 [${conversationId}] Detected follow-up question about previous product`);
+
+    // Lấy sản phẩm ĐANG ĐƯỢC NÓI ĐẾN TRONG CONVERSATION NÀY
+    const currentProductId = context.productFocus;
+    let targetProduct = context.lastProducts?.[0];
+
+    if (currentProductId && context.lastProducts) {
+      targetProduct = context.lastProducts.find(p => p.id === currentProductId) || targetProduct;
+    }
+
+    if (!targetProduct) {
+      return { found: false, confidence: 0, source: 'ai_generated' };
+    }
+
+    // Lấy lịch sử CỦA CONVERSATION NÀY
+    const historyContext = context.conversationHistory 
+      ? this.formatConversationHistory(context.conversationHistory.slice(-4))
+      : '';
+
+    // Tạo prompt với context CỦA CONVERSATION NÀY
+    let promptContext = `[CONVERSATION ID: ${conversationId}]
+
+CUỘC HỘI THOẠI TRƯỚC ĐÓ TRONG PHIÊN NÀY:
+${historyContext}
+
+THÔNG TIN SẢN PHẨM ĐANG ĐƯỢC THẢO LUẬN:
+TÊN: ${targetProduct.name}
+GIÁ: ${this.formatPrice(targetProduct.price)}
+
+CÂU HỎI TIẾP THEO: "${originalPrompt}"
+
+Hãy trả lời câu hỏi này như một phần tiếp theo của cuộc trò chuyện trên.
+TRẢ LỜI NGẮN GỌN (40-60 từ), TẬP TRUNG vào câu hỏi cụ thể.
+
+TRẢ LỜI:`;
+
+    const aiResponse = await this.openai.callOpenAI(promptContext, {
+      maxTokens: 120,
+      temperature: 0.4,
+    });
+
+    return {
+      found: true,
+      answer: aiResponse.text,
+      confidence: 0.85,
+      source: 'ai_generated',
+      metadata: { 
+        cached: false,
+        usage: aiResponse.usage || {},
+        products: [targetProduct]
+      },
+    };
+  }
+
+  // ============ GENERATE AI WITH USAGE TRACKING ============
+  private async generateAIAnswerWithUsage(
+    originalPrompt: string,
+    normalizedPrompt: string,
+    metadata?: any,
+    context?: ConversationContext,
+    ownerEmail?: string
+  ): Promise<{ text: string; usage: any; products?: any[] }> {
+    // LẤY CONTEXT TỪ DATABASE
+    const relevantProducts = await this.findRelevantProducts(normalizedPrompt, ownerEmail);
+    const relevantQAs = await this.findSimilarQAs(normalizedPrompt, 3);
+
+    console.log(`\n================================================================================`);
+    console.log(`📦 DANH SÁCH SẢN PHẨM DÙNG CHO AI:`);
+    if (relevantProducts.length > 0) {
+      relevantProducts.forEach((p, idx) => {
+        console.log(`${idx + 1}. ${p.name} (ID: ${p.id}, Slug: ${p.slug}, Giá: ${p.price}đ)`);
+        if (p.description) {
+          console.log(`   Mô tả: ${p.description.substring(0, 100)}...`);
+        }
+      });
+    } else {
+      console.log(`❌ KHÔNG TÌM THẤY SẢN PHẨM LIÊN QUAN`);
+    }
+    console.log(`================================================================================\n`);
+
+    // TẠO CONTEXT CHO AI (có thể thêm context conversation nếu cần)
+    let contextPrompt = '';
+    if (context?.conversationHistory?.length) {
+      const recentHistory = context.conversationHistory.slice(-4);
+      contextPrompt = `LỊCH SỬ TRÒ CHUYỆN GẦN ĐÂY:\n${this.formatConversationHistory(recentHistory)}\n\n`;
+    }
+
+    let promptContext = `${contextPrompt}Bạn là trợ lý tư vấn thời trang chuyên nghiệp.
+
+NGUYÊN TẮC TRẢ LỜI:
+1. Trả lời NGẮN GỌN, DỄ HIỂU, TẬP TRUNG vào câu hỏi
+2. Chỉ đưa thông tin LIÊN QUAN TRỰC TIẾP đến câu hỏi
+3. Không lan man, không thêm thông tin không cần thiết
+4. Nếu có sản phẩm phù hợp, giới thiệu TỐI ĐA 2-3 sản phẩm và NHẮC ĐẾN TÊN SẢN PHẨM CHÍNH XÁC
+
+`;
+
+    // Thêm sản phẩm liên quan (nếu có)
+    if (relevantProducts.length > 0) {
+      promptContext += `SẢN PHẨM LIÊN QUAN:\n`;
+      relevantProducts.slice(0, 3).forEach((p, i) => {
+        promptContext += `${i + 1}. ${p.name} - ${this.formatPrice(p.price)}\n`;
+        if (p.description) promptContext += `   ${p.description.substring(0, 100)}...\n`;
+      });
+      promptContext += '\n';
+    }
+
+    // Thêm Q&A tham khảo (nếu có)
+    if (relevantQAs.length > 0) {
+      promptContext += `CÂU HỎI TƯƠNG TỰ ĐÃ TRẢ LỜI:\n`;
+      relevantQAs.forEach((qa, i) => {
+        promptContext += `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}\n\n`;
+      });
+    }
+
+    promptContext += `CÂU HỎI CỦA KHÁCH HÀNG: ${originalPrompt}
+
+TRẢ LỜI (tối đa 50 từ, NHẮC TÊN SẢN PHẨM nếu có):`;
+
+    // In ra prompt final
+    console.log(`\n================================================================================`);
+    console.log(`💬 FINAL PROMPT SENT TO AI:`);
+    console.log(`================================================================================`);
+    console.log(promptContext);
+    console.log(`================================================================================\n`);
+
+    // GỌI AI
+    const aiResponse = await this.openai.callOpenAI(promptContext, {
+      ...(metadata || {}),
+      maxTokens: 150,
+      temperature: 0.7,
+    });
+
+    // Trả về kèm thông tin sản phẩm để client xử lý
+    return {
+      text: aiResponse.text,
+      usage: aiResponse.usage || {},
+      products: relevantProducts.length > 0 
+        ? relevantProducts.slice(0, 3).map(p => ({
+            id: p.id,
+            name: p.name,
+            slug: p.slug,
+            price: p.price,
+            description: p.description
+          }))
+        : []
+    };
+  }
+
+  // ============ GENERATE PRODUCT DETAIL ANSWER ============
+  private async generateProductDetailAnswer(
+    originalPrompt: string,
+    product: any,
+    metadata?: any,
+    context?: ConversationContext
+  ): Promise<{ text: string; usage: any; products?: any[] }> {
+    
+    // Tạo prompt đặc biệt cho phân tích sản phẩm
+    let contextPrompt = '';
+    if (context?.conversationHistory?.length) {
+      const recentHistory = context.conversationHistory.slice(-2);
+      contextPrompt = `LỊCH SỬ TRÒ CHUYỆN:\n${this.formatConversationHistory(recentHistory)}\n\n`;
+    }
+
+    let promptContext = `${contextPrompt}Bạn là chuyên gia tư vấn sản phẩm thời trang. 
+Hãy phân tích THÔNG TIN SẢN PHẨM dưới đây và trả lời câu hỏi của khách hàng.
+
+THÔNG TIN SẢN PHẨM:
+TÊN: ${product.name}
+GIÁ: ${this.formatPrice(product.price)}
+MÔ TẢ: ${product.description.substring(0, 2000)}... [đã rút gọn]
+
+`;
+
+    // Kiểm tra loại câu hỏi
+    const normalizedPrompt = this.normalizeTextForMatching(originalPrompt);
+    
+    if (normalizedPrompt.includes('chất liệu') || normalizedPrompt.includes('vải') || normalizedPrompt.includes('làm bằng')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ CHẤT LIỆU VẢI CỦA SẢN PHẨM\n`;
+    } 
+    else if (normalizedPrompt.includes('giá') || normalizedPrompt.includes('bao nhiêu tiền') || normalizedPrompt.includes('giá cả')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ GIÁ CẢ VÀ GIÁ TRỊ SẢN PHẨM\n`;
+    }
+    else if (normalizedPrompt.includes('size') || normalizedPrompt.includes('kích thước') || normalizedPrompt.includes('form dáng')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ KÍCH THƯỚC VÀ FORM DÁNG\n`;
+    }
+    else if (normalizedPrompt.includes('phù hợp') || normalizedPrompt.includes('dành cho') || normalizedPrompt.includes('ai mặc')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ ĐỐI TƯỢNG PHÙ HỢP\n`;
+    }
+    else if (normalizedPrompt.includes('ưu điểm') || normalizedPrompt.includes('tốt') || normalizedPrompt.includes('nổi bật')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ ƯU ĐIỂM VÀ ĐIỂM NỔI BẬT\n`;
+    }
+    else if (normalizedPrompt.includes('bảo quản') || normalizedPrompt.includes('giặt') || normalizedPrompt.includes('sử dụng')) {
+      promptContext += `HÃY TẬP TRUNG TRẢ LỜI VỀ CÁCH BẢO QUẢN VÀ SỬ DỤNG\n`;
+    }
+
+    promptContext += `
+CÂU HỎI CỦA KHÁCH HÀNG: "${originalPrompt}"
+
+YÊU CẦU TRẢ LỜI:
+1. Dựa HOÀN TOÀN vào thông tin sản phẩm trên
+2. Trả lời NGẮN GỌN, SÚC TÍCH (tối đa 80 từ)
+3. Tập trung vào yêu cầu cụ thể của khách hàng
+4. KHÔNG bịa thêm thông tin ngoài mô tả
+5. Nếu không tìm thấy thông tin, nói rõ "Theo mô tả sản phẩm không đề cập cụ thể về..."
+
+TRẢ LỜI:`;
+
+    // GỌI AI
+    const aiResponse = await this.openai.callOpenAI(promptContext, {
+      ...(metadata || {}),
+      maxTokens: 200,
+      temperature: 0.3,
+    });
+
+    return {
+      text: aiResponse.text,
+      usage: aiResponse.usage || {},
+      products: [{
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        price: product.price,
+        description: product.description
+      }]
+    };
+  }
+
+  // ============ KIỂM TRA CÂU HỎI SẢN PHẨM ============
+  private isProductQuestion(normalizedPrompt: string): boolean {
+    const productKeywords = [
+      'áo', 'quần', 'váy', 'đầm', 'giày', 'dép', 'túi', 'ví',
+      'thun', 'sơmi', 'khoác', 'hoodie', 'jean', 'tây', 'short',
+      'jogger', 'polo', 'tanktop', 'vest', 'len', 'sản phẩm', 'món',
+      'vớ', 'tất', 'dây', 'tay', 'cổ', 'mũ', 'nón', 'khăn', 'đồng hồ',
+      'giặc', 'tăng', 'gối', 'nệm', 'gương', 'bàn chải'
+    ];
+    
+    const questionWords = ['gì', 'nào', 'sao', 'thế nào', 'ra sao', 'tư vấn'];
+    
+    const keywords = this.extractKeywords(normalizedPrompt);
+    const hasProductKeyword = keywords.some(kw => 
+      productKeywords.some(term => kw.includes(term))
+    );
+    
+    const hasQuestionWord = keywords.some(kw =>
+      questionWords.some(term => kw.includes(term))
+    ) || normalizedPrompt.includes('tư vấn'); // Hỗ trợ "tư vấn" trực tiếp
+    
+    return hasProductKeyword && hasQuestionWord;
+  }
+
+  // ============ TÌM SẢN PHẨM CỤ THỂ ============
+  private async findSpecificProduct(normalizedPrompt: string, ownerEmail?: string): Promise<any | null> {
+    const normalizedForMatch = this.normalizeTextForMatching(normalizedPrompt);
+    
+    // Tìm theo tên, slug, hoặc category
+    const where: any = {
+      isActive: true,
+      OR: [
+        { 
+          name: { 
+            contains: normalizedForMatch,
+            mode: 'insensitive' 
+          } 
+        },
+        { 
+          slug: { 
+            contains: normalizedForMatch.replace(/\s+/g, '-'),
+            mode: 'insensitive' 
+          } 
+        },
+        { 
+          category: { 
+            contains: normalizedForMatch,
+            mode: 'insensitive' 
+          } 
+        },
+      ],
+    };
+    
+    // Filter by ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+    
+    const products = await this.prisma.product.findMany({
+      where,
+      take: 1,
+    });
+
+    return products.length > 0 ? products[0] : null;
+  }
+
+  // ============ KIỂM TRA VÀ TRÍCH XUẤT SLUG TỪ PROMPT ============
+  private extractSlugFromPrompt(prompt: string): string | null {
+    // Pattern: tìm các từ được nối với dấu gạch ngang như: ao-nam-icod, quan-jean-xanh, etc.
+    const slugPattern = /\b[a-z0-9]+(?:-[a-z0-9]+)+\b/gi;
+    const matches = prompt.match(slugPattern);
+    
+    if (matches && matches.length > 0) {
+      // Lấy slug dài nhất hoặc phù hợp nhất
+      const slug = matches[0].toLowerCase();
+      console.log(`🔍 Extracted slug from prompt: "${slug}"`);
+      return slug;
+    }
+    
+    return null;
+  }
+
+  // ============ TÌM SẢN PHẨM THEO SLUG ============
+  private async findProductBySlug(slug: string, ownerEmail?: string): Promise<any | null> {
+    try {
+      const where: any = {
+        slug: {
+          equals: slug,
+          mode: 'insensitive'
+        },
+        isActive: true
+      };
+      
+      // Filter by ownerEmail nếu có
+      if (ownerEmail) {
+        where.ownerEmail = ownerEmail;
+      }
+      
+      const product = await this.prisma.product.findFirst({
+        where
+      });
+      
+      if (product) {
+        console.log(`✅ Found product by slug "${slug}": ${product.name}`);
+      }
+      
+      return product || null;
+    } catch (error) {
+      console.error(`❌ Error finding product by slug "${slug}":`, error.message);
+      return null;
+    }
+  }
+
+  // ============ TẠO PROMPT VỚI THÔNG TIN SẢN PHẨM VÀ SLUG ============
+  private createPromptForAI(userPrompt: string, product: any): string {
+    return `Bạn là chuyên gia tư vấn sản phẩm thời trang.
+
+THÔNG TIN SẢN PHẨM ĐƯỢC TRỎ ĐẾN:
+- TÊN: ${product.name}
+- SLUG: ${product.slug}
+- GIÁ: ${this.formatPrice(product.price)}
+- MÔ TẢ: ${product.description ? product.description.substring(0, 500) : 'Không có mô tả'}
+
+CÂU HỎI CỦA KHÁCH HÀNG: ${userPrompt}
+
+Hãy trả lời dựa trên thông tin sản phẩm được chỉ định ở trên.`;
+  }
+
+  // ============ HELPER FUNCTIONS ============
+  
+  private normalizeText(text: string): string {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  private normalizeTextForMatching(text: string): string {
     return text
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s]/g, ' ')
-      .replace(/\d+/g, ' ') // Giữ số cho measurement matching (tách riêng)
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  private advancedPromptAnalysis(prompt: string): any {
-    const lowerPrompt = prompt.toLowerCase();
-    const normalizedPrompt = this.advancedNormalizeText(prompt);
-    const keywords = this.extractKeywords(normalizedPrompt);
-    
-    // Intent detection nâng cao
-    let intent = 'other';
-    let category = 'general';
-    
-    // Kiểm tra các intent dựa trên keywords
-    if (keywords.includes('size') || keywords.includes('số đo') || keywords.includes('vòng')) {
-      intent = 'tu_van_size';
-      category = 'size';
-    } else if (keywords.includes('giờ') || keywords.includes('mấy giờ') || keywords.includes('thời gian')) {
-      intent = 'hỏi_giờ_làm';
-      category = 'thông_tin';
-    } else if (keywords.includes('đăng ký') || keywords.includes('register') || keywords.includes('tạo tài khoản')) {
-      intent = 'đăng_ký';
-      category = 'hướng_dẫn';
-    } else if (keywords.includes('chào') || keywords.includes('hello') || keywords.includes('xin chào')) {
-      intent = 'chào_hỏi';
-      category = 'giao_tiếp';
-    } else if (keywords.includes('giá') || keywords.includes('bao nhiêu') || keywords.includes('cost')) {
-      intent = 'hỏi_giá';
-      category = 'giá_cả';
-    } else if (keywords.includes('mua') || keywords.includes('đặt hàng') || keywords.includes('order')) {
-      intent = 'mua_hàng';
-      category = 'đơn_hàng';
-    } else if (keywords.includes('trả hàng') || keywords.includes('đổi') || keywords.includes('hoàn tiền')) {
-      intent = 'trả_đổi';
-      category = 'dịch_vụ';
-    }
+  private extractKeywords(text: string): string[] {
+    const stopWords = new Set([
+      'có', 'và', 'là', 'của', 'cho', 'với', 'như', 'từ', 'được',
+      'một', 'các', 'hay', 'hoặc', 'nếu', 'thì', 'mà', 'ở', 'trong',
+      'bạn', 'tôi', 'shop', 'bán', 'mua', 'nào', 'gì', 'ạ', 'vậy',
+    ]);
 
-    return {
-      intent,
-      category,
-      sentiment: 'neutral',
-      confidence: 0.5,
-      modelUsed: 'advanced_analysis',
-      isTrainingExample: false,
-      detectedKeywords: keywords
-    };
+    return text
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word));
   }
 
-  // ==================== TRAINING DATA CREATION ====================
+  private extractProductKeywords(text: string): string[] {
+    const productTerms = [
+      'áo', 'quần', 'váy', 'đầm', 'giày', 'dép', 'túi', 'ví',
+      'thun', 'sơmi', 'khoác', 'hoodie', 'jean', 'tây', 'short',
+      'jogger', 'polo', 'tanktop', 'vest', 'len',
+      'vớ', 'tất', 'dây', 'tay', 'cổ', 'mũ', 'nón', 'khăn', 'đồng hồ',
+      'giặc', 'tăng', 'gối', 'nệm', 'gương', 'bàn chải', 'găng tay'
+    ];
 
-  private async createTrainingDataFromMessage(message: any, analysis: any) {
-    try {
-      // Chỉ tạo training data nếu confidence cao và là example tốt
-      if (analysis.confidence > 0.7 && analysis.foundMatch) {
-        // Tìm training session active
-        const trainingSession = await this.prisma.trainingSession.findFirst({
-          where: {
-            modelType: 'classification',
-            status: { in: ['collecting_data', 'training'] }
-          },
-          orderBy: { createdAt: 'desc' }
-        });
-
-        if (trainingSession) {
-          await this.prisma.trainingData.create({
-            data: {
-              messageId: message.id,
-              input: message.content,
-              output: analysis.answer,
-              category: analysis.category,
-              intent: analysis.intent,
-              qualityScore: analysis.confidence,
-              source: 'example_qa_match',
-              language: 'vi',
-              trainingSessionId: trainingSession.id,
-              metadata: {
-                matchedQuestion: analysis.matchedQuestion,
-                similarity: analysis.similarity,
-                originalQuestion: message.content
-              }
-            },
-          });
-
-          
-          // Tăng usage count của ExampleQA được match
-          if (analysis.matchedQuestionId) {
-            await this.prisma.exampleQA.update({
-              where: { id: analysis.matchedQuestionId },
-              data: {
-                usageCount: { increment: 1 }
-              }
-            });
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error creating training data:', error);
-    }
+    const keywords = this.extractKeywords(text);
+    return keywords.filter(kw => 
+      productTerms.some(term => kw.includes(term) || term.includes(kw))
+    );
   }
 
-  // ==================== HELPER METHODS ====================
+  private calculateKeywordOverlap(keywords1: string[], keywords2: string[]): number {
+    if (keywords1.length === 0 || keywords2.length === 0) return 0;
 
-  private limitWords(text: string, maxWords: number): string {
-    if (!text) return '';
-    
-    const words = text.trim().split(/\s+/);
-    
-    if (words.length <= maxWords) {
-      return text;
-    }
-    
-    const limitedWords = words.slice(0, maxWords);
-    let result = limitedWords.join(' ');
-    
-    if (!/[.!?]$/.test(result)) {
-      const lastSentenceEnd = Math.max(
-        result.lastIndexOf('.'),
-        result.lastIndexOf('!'),
-        result.lastIndexOf('?')
-      );
-      
-      if (lastSentenceEnd > result.length * 0.7) {
-        result = result.substring(0, lastSentenceEnd + 1);
-      } else {
-        result += '...';
-      }
-    }
-    
-    return result;
+    const set1 = new Set(keywords1);
+    const set2 = new Set(keywords2);
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+
+    return intersection.size / Math.max(set1.size, set2.size);
   }
 
+  private formatPrice(price: number): string {
+    return new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+    }).format(price);
+  }
+
+  private formatConversationHistory(history: Array<{role: string, content: string}>): string {
+    if (!history || history.length === 0) return '(Chưa có lịch sử trò chuyện)';
+    
+    return history.map((msg, index) => {
+      const prefix = msg.role === 'user' ? 'KHÁCH HÀNG' : 'TRỢ LÝ';
+      const content = msg.content.length > 100 
+        ? msg.content.substring(0, 100) + '...' 
+        : msg.content;
+      return `${prefix}: ${content}`;
+    }).join('\n');
+  }
+
+  // ============ SAVE FUNCTIONS ============
+  
+  private async getOrCreateConversation(conversationId: string | undefined, prompt: string): Promise<string> {
+    if (conversationId) return conversationId;
+
+    const conv = await this.prisma.conversation.create({
+      data: {
+        tags: [],
+        title: prompt.substring(0, 50) + (prompt.length > 50 ? '...' : ''),
+      },
+    });
+    return conv.id;
+  }
+
+  private async saveUserMessage(conversationId: string, content: string) {
+    return this.prisma.message.create({
+      data: {
+        conversationId,
+        role: 'user',
+        content,
+        source: 'user',
+        tokens: content.split(/\s+/).length,
+      },
+    });
+  }
+
+  private async saveAssistantMessage(
+    conversationId: string,
+    content: string,
+    source: string,
+    metadata: any
+  ) {
+    return this.prisma.message.create({
+      data: {
+        conversationId,
+        role: 'assistant',
+        content,
+        source,
+        tokens: content.split(/\s+/).length,
+        metadata: {
+          ...metadata,
+          products: metadata?.products || [],
+        },
+      },
+    });
+  }
+
+  // Cache disabled - no longer saving responses
+  private async saveToCache(hash: string, content: string, usage: any = {}, products: any[] = []) {
+    // Cache functionality disabled
+  }
+
+  // ============ HELPER FUNCTION FOR WORD COUNT ============
   private countWords(text: string): number {
     if (!text) return 0;
     return text.trim().split(/\s+/).length;
   }
 
-  private generateConversationTitle(prompt: string): string {
-    return prompt.length > 20 ? prompt.substring(0, 20) + '...' : prompt;
+// ============ TÌM SẢN PHẨM LIÊN QUAN (OPTIMIZED) ============
+private async findRelevantProducts(normalizedPrompt: string, ownerEmail?: string): Promise<any[]> {
+  const keywords = this.extractProductKeywords(normalizedPrompt);
+  
+  console.log(`\n🔍 DEBUG findRelevantProducts:`);
+  console.log(`   Input: "${normalizedPrompt}"`);
+  console.log(`   Extracted keywords: [${keywords.join(', ')}]`);
+  console.log(`   ownerEmail: ${ownerEmail}`);
+  
+  if (keywords.length === 0) {
+    console.log(`   ⚠️  No keywords found - searching all products`);
+    // Nếu không có keyword cụ thể, lấy sản phẩm mới nhất
+    const where: any = { isActive: true };
+    if (ownerEmail) where.ownerEmail = ownerEmail;
+    
+    const products = await this.prisma.product.findMany({
+      where,
+      take: 3,
+      orderBy: { createdAt: 'desc' },
+    });
+    
+    console.log(`   📦 Returned ${products.length} latest products`);
+    return products;
   }
 
-  // ==================== EXISTING METHODS ====================
+  // ============ BƯỚC 1: TÌM EXACT MATCH (ƯU TIÊN CAO NHẤT) ============
+  const exactMatches: any[] = [];
+  
+  for (const keyword of keywords) {
+    const where: any = {
+      isActive: true,
+      OR: [
+        { name: { equals: keyword, mode: 'insensitive' } },
+        { category: { equals: keyword, mode: 'insensitive' } },
+      ],
+    };
+    
+    if (ownerEmail) where.ownerEmail = ownerEmail;
+    
+    const exact = await this.prisma.product.findMany({
+      where,
+      take: 2,
+    });
+    
+    if (exact.length > 0) {
+      console.log(`   ✅ EXACT match for "${keyword}": ${exact.map(p => p.name).join(', ')}`);
+      exactMatches.push(...exact);
+    }
+  }
 
+  // Nếu có exact match, ưu tiên trả về
+  if (exactMatches.length > 0) {
+    const uniqueProducts = this.deduplicateProducts(exactMatches);
+    console.log(`   🎯 Returning ${uniqueProducts.length} EXACT matches`);
+    return uniqueProducts.slice(0, 5);
+  }
+
+  // ============ BƯỚC 2: TÌM PARTIAL MATCH (CONTAINS) ============
+  const partialMatches: any[] = [];
+  
+  for (const keyword of keywords) {
+    const where: any = {
+      isActive: true,
+      OR: [
+        { name: { contains: keyword, mode: 'insensitive' } },
+        { category: { contains: keyword, mode: 'insensitive' } },
+        { description: { contains: keyword, mode: 'insensitive' } },
+      ],
+    };
+    
+    if (ownerEmail) where.ownerEmail = ownerEmail;
+    
+    const partial = await this.prisma.product.findMany({
+      where,
+      take: 3,
+    });
+    
+    if (partial.length > 0) {
+      console.log(`   ✅ PARTIAL match for "${keyword}": ${partial.map(p => p.name).join(', ')}`);
+      partialMatches.push(...partial);
+    }
+  }
+
+  if (partialMatches.length > 0) {
+    const uniqueProducts = this.deduplicateProducts(partialMatches);
+    console.log(`   📦 Returning ${uniqueProducts.length} PARTIAL matches`);
+    return uniqueProducts.slice(0, 5);
+  }
+
+  // ============ BƯỚC 3: FUZZY SEARCH (TÌM GẦN ĐÚNG) ============
+  console.log(`   🔄 No direct matches, trying fuzzy search...`);
+  
+  const where: any = { isActive: true };
+  if (ownerEmail) where.ownerEmail = ownerEmail;
+  
+  const allProducts = await this.prisma.product.findMany({
+    where,
+    take: 20, // Lấy nhiều hơn để filter
+  });
+
+  // Score và rank sản phẩm
+  const scoredProducts = allProducts.map(product => {
+    let score = 0;
+    const nameWords = this.normalizeText(product.name).split(/\s+/);
+    const categoryWords = this.normalizeText(product.category || '').split(/\s+/);
+    
+    for (const keyword of keywords) {
+      // Check exact word match trong name
+      if (nameWords.some(word => word === keyword)) {
+        score += 10;
+      }
+      // Check partial match trong name
+      else if (nameWords.some(word => word.includes(keyword) || keyword.includes(word))) {
+        score += 5;
+      }
+      
+      // Check category
+      if (categoryWords.some(word => word === keyword)) {
+        score += 8;
+      } else if (categoryWords.some(word => word.includes(keyword) || keyword.includes(word))) {
+        score += 3;
+      }
+      
+      // Check description
+      if (product.description && this.normalizeText(product.description).includes(keyword)) {
+        score += 2;
+      }
+    }
+    
+    return { product, score };
+  });
+
+  const matchedProducts = scoredProducts
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.product)
+    .slice(0, 5);
+
+  if (matchedProducts.length > 0) {
+    console.log(`   🎯 FUZZY matches found:`, matchedProducts.map(p => `${p.name} (score: ${scoredProducts.find(s => s.product.id === p.id)?.score})`));
+    return matchedProducts;
+  }
+
+  // ============ BƯỚC 4: FALLBACK - LẤY SẢN PHẨM MỚI NHẤT ============
+  console.log(`   ⚠️  No matches found, returning latest products`);
+  const latestProducts = await this.prisma.product.findMany({
+    where: { isActive: true, ...(ownerEmail && { ownerEmail }) },
+    take: 1,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  return latestProducts;
+}
+
+// ============ HELPER: DEDUPLICATE PRODUCTS ============
+private deduplicateProducts(products: any[]): any[] {
+  const seen = new Set<string>();
+  const unique: any[] = [];
+  
+  for (const product of products) {
+    if (!seen.has(product.id)) {
+      seen.add(product.id);
+      unique.push(product);
+    }
+  }
+  
+  return unique;
+}
+
+  // ============ TÌM Q&A TƯƠNG TỰ ============
+  private async findSimilarQAs(normalizedPrompt: string, limit: number = 3): Promise<any[]> {
+    const normalizedForMatch = this.normalizeTextForMatching(normalizedPrompt);
+    const keywords = this.extractKeywords(normalizedForMatch);
+    const examples = await this.prisma.exampleQA.findMany({
+      where: { isActive: true },
+    });
+
+    const scored = examples.map(example => {
+      const exampleKeywords = this.extractKeywords(this.normalizeTextForMatching(example.question));
+      const score = this.calculateKeywordOverlap(keywords, exampleKeywords);
+      return { ...example, score };
+    });
+
+    return scored
+      .filter(item => item.score > 0.3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  // ============ EXACT MATCH ============
+  private async findExactMatch(normalizedPrompt: string): Promise<MatchedAnswer> {
+    const examples = await this.prisma.exampleQA.findMany({
+      where: { isActive: true },
+    });
+
+    for (const example of examples) {
+      const normalizedQuestion = this.normalizeTextForMatching(example.question);
+      const normalizedPromptForMatch = this.normalizeTextForMatching(normalizedPrompt);
+      
+      if (normalizedQuestion === normalizedPromptForMatch) {
+        return {
+          found: true,
+          answer: example.answer,
+          question: example.question,
+          confidence: 1.0,
+          source: 'exact_match',
+          metadata: { 
+            exampleId: example.id,
+            cached: false,
+            usage: {} 
+          },
+        };
+      }
+    }
+
+    return { found: false, confidence: 0, source: 'exact_match' };
+  }
+
+  // ============ FUZZY MATCH ============
+  private async findFuzzyMatch(normalizedPrompt: string): Promise<MatchedAnswer> {
+    const examples = await this.prisma.exampleQA.findMany({
+      where: { isActive: true },
+    });
+
+    const normalizedPromptForMatch = this.normalizeTextForMatching(normalizedPrompt);
+    const keywords = this.extractKeywords(normalizedPromptForMatch);
+    let bestMatch: any = null;
+    let bestScore = 0;
+
+    for (const example of examples) {
+      const normalizedQuestion = this.normalizeTextForMatching(example.question);
+      const exampleKeywords = this.extractKeywords(normalizedQuestion);
+
+      const score = this.calculateKeywordOverlap(keywords, exampleKeywords);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = example;
+      }
+    }
+
+    if (bestScore >= 0.75) {
+      return {
+        found: true,
+        answer: bestMatch.answer,
+        question: bestMatch.question,
+        confidence: bestScore,
+        source: 'fuzzy_match',
+        metadata: { 
+          exampleId: bestMatch.id, 
+          score: bestScore,
+          cached: false,
+          usage: {}
+        },
+      };
+    }
+
+    return { found: false, confidence: 0, source: 'fuzzy_match' };
+  }
+
+  // ============ EXISTING METHODS ============
+  
   async getConversation(id: string) {
-    return this.prisma.conversation.findUnique({ 
+    return this.prisma.conversation.findUnique({
       where: { id },
       include: {
         messages: {
-          orderBy: { createdAt: 'asc' }
-        }
-      }
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
   }
 
   async getMessages(id: string) {
-    return this.prisma.message.findMany({ 
-      where: { conversationId: id }, 
-      orderBy: { createdAt: 'asc' }
-    });
-  }
-
-  async getMessagesByUser(userId: string) {
-    const conversations = await this.prisma.conversation.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-
-    const conversationIds = conversations.map(c => c.id);
-
-    if (!conversationIds.length) {
-      return [];
-    }
-
     return this.prisma.message.findMany({
-      where: {
-        conversationId: { in: conversationIds },
-      },
+      where: { conversationId: id },
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  // ==================== ANALYTICS METHODS ====================
-
-  async getConversationAnalytics(conversationId: string) {
-    const messages = await this.prisma.message.findMany({
-      where: { conversationId },
-      orderBy: { createdAt: 'asc' }
-    });
-
-    const userMessages = messages.filter(m => m.role === 'user');
-    
-    const analytics = {
-      totalMessages: messages.length,
-      userMessages: userMessages.length,
-      assistantMessages: messages.length - userMessages.length,
-      sources: this.countSources(messages),
-      detectedIntents: this.countIntents(userMessages),
-      sentimentDistribution: this.countSentiments(userMessages),
-      averageConfidence: this.calculateAverageConfidence(userMessages),
-      exampleQAMatches: messages.filter(m => m.source === 'example_qa').length,
-    };
-
-    return analytics;
-  }
-
-  private countSources(messages: any[]): any {
-    const sources: any = {};
-    messages.forEach(msg => {
-      if (msg.source) {
-        sources[msg.source] = (sources[msg.source] || 0) + 1;
-      }
-    });
-    return sources;
-  }
-
-  private countIntents(messages: any[]): any {
-    const intents: any = {};
-    messages.forEach(msg => {
-      if (msg.intent) {
-        intents[msg.intent] = (intents[msg.intent] || 0) + 1;
-      }
-    });
-    return intents;
-  }
-
-  private countSentiments(messages: any[]): any {
-    const sentiments: any = {};
-    messages.forEach(msg => {
-      if (msg.sentiment) {
-        sentiments[msg.sentiment] = (sentiments[msg.sentiment] || 0) + 1;
-      }
-    });
-    return sentiments;
-  }
-
-  private calculateAverageConfidence(messages: any[]): number {
-    const confidences = messages
-      .filter(msg => msg.confidence)
-      .map(msg => msg.confidence);
-    
-    if (confidences.length === 0) return 0;
-    
-    return confidences.reduce((a, b) => a + b, 0) / confidences.length;
-  }
-
-  // ==================== EXAMPLE QA MANAGEMENT ====================
-
-  async getExampleQAAnalytics() {
-    const totalExampleQAs = await this.prisma.exampleQA.count();
-    const activeExampleQAs = await this.prisma.exampleQA.count({
-      where: { isActive: true }
-    });
-    
-    const intents = await this.prisma.exampleQA.groupBy({
-      by: ['intent'],
-      _count: { id: true },
-      where: { isActive: true }
-    });
-
-    const categories = await this.prisma.exampleQA.groupBy({
-      by: ['category'],
-      _count: { id: true },
-      where: { isActive: true }
-    });
-
-    // Top 10 most used ExampleQAs
-    const mostUsed = await this.prisma.exampleQA.findMany({
-      where: { isActive: true },
-      orderBy: { usageCount: 'desc' },
-      take: 10,
-      select: {
-        id: true,
-        question: true,
-        intent: true,
-        category: true,
-        usageCount: true
-      }
-    });
-
-    return {
-      total: totalExampleQAs,
-      active: activeExampleQAs,
-      inactive: totalExampleQAs - activeExampleQAs,
-      intents: intents.reduce((acc, item) => {
-        acc[item.intent || 'unknown'] = item._count.id;
-        return acc;
-      }, {}),
-      categories: categories.reduce((acc, item) => {
-        acc[item.category || 'unknown'] = item._count.id;
-        return acc;
-      }, {}),
-      mostUsed
-    };
-  }
-
-  // ==================== ENHANCED MATCHING DEBUG ====================
-
-  async debugSimilarityMatching(userQuestion: string) {
-    const exampleQAs = await this.prisma.exampleQA.findMany({
-      where: { isActive: true }
-    });
-
-    const matches = await this.findSimilarQuestionsAdvanced(userQuestion, exampleQAs);
-    
-    return {
-      userQuestion,
-      totalExampleQAs: exampleQAs.length,
-      matches: matches.slice(0, 5).map(match => ({
-        question: match.question,
-        answer: match.answer.substring(0, 100) + '...',
-        intent: match.intent,
-        category: match.category,
-        similarity: match.similarity,
-        scores: match.scores,
-        matchedTags: match.matchedTags
-      })),
-      bestMatch: matches[0] ? {
-        question: matches[0].question,
-        similarity: matches[0].similarity,
-        wouldMatch: matches[0].similarity >= 0.5
-      } : null
-    };
+  // ============ CLEAR CONTEXT ============
+  async clearConversationContext(conversationId: string) {
+    this.conversationContexts.delete(conversationId);
+    console.log(`🧹 Cleared context for conversation ${conversationId}`);
   }
 }

@@ -9,7 +9,7 @@ import * as XLSX from 'xlsx';
 export class ProductService {
   constructor(private prisma: PrismaService) {}
 
-  async create(dto: CreateProductDto) {
+  async create(dto: CreateProductDto, ownerEmail?: string) {
     const product = await this.prisma.product.create({
       data: {
         name: dto.name,
@@ -23,6 +23,7 @@ export class ProductService {
         category: dto.category ?? null,
         brand: dto.brand ?? null,
         isActive: dto.isActive ?? true,
+        ownerEmail: ownerEmail ?? dto.ownerEmail ?? null,
       },
     });
 
@@ -41,11 +42,17 @@ export class ProductService {
     brand = '', 
     isActive = '',
     minPrice?: number,
-    maxPrice?: number
+    maxPrice?: number,
+    ownerEmail?: string
   ) {
     const skip = (page - 1) * limit;
 
     const where: any = {};
+
+    // Filter by ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
 
     if (search) {
       where.OR = [
@@ -94,8 +101,13 @@ export class ProductService {
     };
   }
 
-  async getAllProducts(search = '', category = '', brand = '', isActive = '') {
+  async getAllProducts(search = '', category = '', brand = '', isActive = '', ownerEmail?: string) {
     const where: any = {};
+
+    // Filter by ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
 
     if (search) {
       where.OR = [
@@ -128,13 +140,20 @@ export class ProductService {
     };
   }
 
-  async getById(id: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { id },
+  async getById(id: string, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // Filter by ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+    
+    const product = await this.prisma.product.findFirst({
+      where,
     });
     
     if (!product) {
-      return { success: false, message: 'Sản phẩm không tồn tại' };
+      return { success: false, message: 'Sản phẩm không tồn tại hoặc bạn không có quyền truy cập' };
     }
     
     return { 
@@ -143,13 +162,20 @@ export class ProductService {
     };
   }
 
-  async update(id: string, dto: UpdateProductDto) {
-    const product = await this.prisma.product.findUnique({
-      where: { id },
+  async update(id: string, dto: UpdateProductDto, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // Check ownership nếu có ownerEmail
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
+    const product = await this.prisma.product.findFirst({
+      where,
     });
     
     if (!product) {
-      return { success: false, message: 'Sản phẩm không tồn tại' };
+      return { success: false, message: 'Sản phẩm không tồn tại hoặc bạn không có quyền chỉnh sửa' };
     }
 
     const updated = await this.prisma.product.update({
@@ -166,6 +192,7 @@ export class ProductService {
         category: dto.category ?? product.category,
         brand: dto.brand ?? product.brand,
         isActive: dto.isActive ?? product.isActive,
+        ownerEmail: dto.ownerEmail ?? product.ownerEmail,
       },
     });
 
@@ -176,13 +203,20 @@ export class ProductService {
     };
   }
 
-  async delete(id: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { id },
+  async delete(id: string, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // Check ownership nếu có ownerEmail
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+    
+    const product = await this.prisma.product.findFirst({
+      where,
     });
     
     if (!product) {
-      return { success: false, message: 'Sản phẩm không tồn tại' };
+      return { success: false, message: 'Sản phẩm không tồn tại hoặc bạn không có quyền xóa' };
     }
 
     await this.prisma.product.delete({ where: { id } });
@@ -193,7 +227,7 @@ export class ProductService {
     };
   }
 
-  async importProducts(file: Express.Multer.File) {
+  async importProducts(file: Express.Multer.File, ownerEmail?: string) {
   if (!file) {
     throw new BadRequestException('File không được tìm thấy');
   }
@@ -210,8 +244,9 @@ export class ProductService {
       details: [] as any[]
     };
 
-    // Lấy tất cả sản phẩm hiện có để check trùng
+    // Lấy tất cả sản phẩm hiện có để check trùng (filter by ownerEmail nếu có)
     const existingProducts = await this.prisma.product.findMany({
+      where: ownerEmail ? { ownerEmail } : {},
       select: { name: true }
     });
     const existingNames = new Set(existingProducts.map(product => product.name.toLowerCase().trim()));
@@ -266,6 +301,7 @@ export class ProductService {
             category: productData.category,
             brand: productData.brand,
             isActive: productData.isActive,
+            ownerEmail: ownerEmail ?? null,
           }
         });
 
@@ -309,10 +345,11 @@ export class ProductService {
 
 
 
-  async exportProducts() {
+  async exportProducts(ownerEmail?: string) {
     try {
-      // Lấy tất cả sản phẩm từ database
+      // Lấy tất cả sản phẩm từ database (filter by ownerEmail nếu có)
       const products = await this.prisma.product.findMany({
+        where: ownerEmail ? { ownerEmail } : {},
         orderBy: { createdAt: 'desc' }
       });
 

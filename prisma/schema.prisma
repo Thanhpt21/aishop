@@ -19,7 +19,7 @@ model User {
   
   conversations Conversation[]
   messages      Message[]
-  trainingSessions TrainingSession[]
+  trainingSessions TrainingSession[]   
   
   @@map("users")
 }
@@ -220,12 +220,14 @@ model ExampleQA {
   updatedAt   DateTime @updatedAt
 
   trainingSessions TrainingSession[]
+  ownerEmail  String?
 
   @@index([intent])
   @@index([category])
   @@index([language])
   @@index([isActive])
   @@index([createdAt])
+  @@index([ownerEmail])
   @@map("example_qa")
 }
 
@@ -244,6 +246,7 @@ model Product {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  ownerEmail  String?
 
   @@index([name])
   @@index([category])
@@ -251,6 +254,7 @@ model Product {
   @@index([price])
   @@index([isActive])
   @@index([createdAt])
+  @@index([ownerEmail])
   @@map("products")
 }
 
