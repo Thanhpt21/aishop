@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, IsBoolean, IsArray } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsBoolean, IsArray, IsEmail } from 'class-validator';
 
 export class CreateExampleQADto {
   @IsNotEmpty()
@@ -29,4 +29,8 @@ export class CreateExampleQADto {
   @IsArray()
   @IsString({ each: true })
   tags?: string[];
+
+  @IsOptional()
+  @IsEmail()
+  ownerEmail?: string;
 }

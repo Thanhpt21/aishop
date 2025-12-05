@@ -9,7 +9,10 @@ import * as XLSX from 'xlsx';
 export class ExampleQAService {
   constructor(private prisma: PrismaService) {}
 
-  async create(dto: CreateExampleQADto) {
+  async create(dto: CreateExampleQADto, userEmail?: string) {
+    // Sử dụng ownerEmail từ DTO hoặc từ user hiện tại
+    const finalOwnerEmail = dto.ownerEmail || userEmail || null;
+
     const exampleQA = await this.prisma.exampleQA.create({
       data: {
         question: dto.question,
@@ -19,6 +22,7 @@ export class ExampleQAService {
         language: dto.language ?? 'vi',
         isActive: dto.isActive ?? true,
         tags: dto.tags ?? [],
+        ownerEmail: finalOwnerEmail, // Thêm ownerEmail
       },
     });
 
@@ -35,7 +39,8 @@ export class ExampleQAService {
     search = '', 
     intent = '', 
     category = '', 
-    isActive = ''
+    isActive = '',
+    ownerEmail?: string // Thêm tham số ownerEmail
   ) {
     const skip = (page - 1) * limit;
 
@@ -60,6 +65,11 @@ export class ExampleQAService {
       where.isActive = isActive === 'true';
     }
 
+    // 🆕 Lọc theo ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
     const [exampleQAs, total] = await this.prisma.$transaction([
       this.prisma.exampleQA.findMany({
         where,
@@ -82,7 +92,13 @@ export class ExampleQAService {
     };
   }
 
-  async getAllExampleQAs(search = '', intent = '', category = '', isActive = '') {
+  async getAllExampleQAs(
+    search = '', 
+    intent = '', 
+    category = '', 
+    isActive = '',
+    ownerEmail?: string // Thêm tham số ownerEmail
+  ) {
     const where: any = {};
 
     if (search) {
@@ -104,6 +120,11 @@ export class ExampleQAService {
       where.isActive = isActive === 'true';
     }
 
+    // 🆕 Lọc theo ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
     const exampleQAs = await this.prisma.exampleQA.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -116,9 +137,16 @@ export class ExampleQAService {
     };
   }
 
-  async getById(id: string) {
+  async getById(id: string, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // 🆕 Kiểm tra ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
     const exampleQA = await this.prisma.exampleQA.findUnique({
-      where: { id },
+      where,
     });
     
     if (!exampleQA) {
@@ -131,9 +159,16 @@ export class ExampleQAService {
     };
   }
 
-  async update(id: string, dto: UpdateExampleQADto) {
+  async update(id: string, dto: UpdateExampleQADto, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // 🆕 Kiểm tra ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
     const exampleQA = await this.prisma.exampleQA.findUnique({
-      where: { id },
+      where,
     });
     
     if (!exampleQA) {
@@ -150,6 +185,7 @@ export class ExampleQAService {
         language: dto.language ?? exampleQA.language,
         isActive: dto.isActive ?? exampleQA.isActive,
         tags: dto.tags ?? exampleQA.tags,
+        ownerEmail: dto.ownerEmail ?? exampleQA.ownerEmail, // Cập nhật ownerEmail
       },
     });
 
@@ -160,9 +196,16 @@ export class ExampleQAService {
     };
   }
 
-  async delete(id: string) {
+  async delete(id: string, ownerEmail?: string) {
+    const where: any = { id };
+    
+    // 🆕 Kiểm tra ownerEmail nếu có
+    if (ownerEmail) {
+      where.ownerEmail = ownerEmail;
+    }
+
     const exampleQA = await this.prisma.exampleQA.findUnique({
-      where: { id },
+      where,
     });
     
     if (!exampleQA) {
@@ -177,113 +220,128 @@ export class ExampleQAService {
     };
   }
 
-  async importExampleQAs(file: Express.Multer.File) {
-  if (!file) {
-    throw new BadRequestException('File không được tìm thấy');
-  }
-
-  try {
-    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
-    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(worksheet);
-
-    const results = {
-      total: data.length,
-      success: 0,
-      errors: [] as string[],
-      details: [] as any[]
-    };
-
-    // Lấy tất cả câu hỏi hiện có để check trùng
-    const existingQAs = await this.prisma.exampleQA.findMany({
-      select: { question: true }
-    });
-    const existingQuestions = new Set(existingQAs.map(qa => qa.question.toLowerCase().trim()));
-
-    for (const [index, row] of data.entries()) {
-      try {
-        const rowData = row as Record<string, any>;
-        
-        // Map Excel columns to ExampleQA data
-        const exampleQAData: CreateExampleQADto = {
-          question: String(rowData['Câu hỏi'] || rowData['question'] || '').trim(),
-          answer: String(rowData['Câu trả lời'] || rowData['answer'] || '').trim(),
-          intent: rowData['Mục đích'] || rowData['intent'] ? String(rowData['Mục đích'] || rowData['intent']).trim() : undefined,
-          category: rowData['Danh mục'] || rowData['category'] ? String(rowData['Danh mục'] || rowData['category']).trim() : undefined,
-          language: rowData['Ngôn ngữ'] || rowData['language'] ? String(rowData['Ngôn ngữ'] || rowData['language']).trim() : 'vi',
-          isActive: rowData['Trạng thái'] || rowData['isActive'] !== undefined ? 
-            String(rowData['Trạng thái'] || rowData['isActive']).toString().toLowerCase() === 'true' : true,
-          tags: rowData['Tags'] || rowData['tags'] ? 
-            String(rowData['Tags'] || rowData['tags']).split(',').map((tag: string) => tag.trim()).filter(tag => tag !== '') : []
-        };
-
-        // Validate required fields
-        if (!exampleQAData.question) {
-          throw new Error('Câu hỏi là bắt buộc');
-        }
-        if (!exampleQAData.answer) {
-          throw new Error('Câu trả lời là bắt buộc');
-        }
-
-        // Check trùng câu hỏi (case insensitive)
-        const normalizedQuestion = exampleQAData.question.toLowerCase().trim();
-        if (existingQuestions.has(normalizedQuestion)) {
-          throw new Error('Câu hỏi đã tồn tại trong hệ thống');
-        }
-
-        // Create example QA
-        await this.prisma.exampleQA.create({
-          data: {
-            question: exampleQAData.question,
-            answer: exampleQAData.answer,
-            intent: exampleQAData.intent,
-            category: exampleQAData.category,
-            language: exampleQAData.language,
-            isActive: exampleQAData.isActive,
-            tags: exampleQAData.tags,
-          }
-        });
-
-        // Thêm vào set để tránh trùng trong cùng 1 file import
-        existingQuestions.add(normalizedQuestion);
-        
-        results.success++;
-        results.details.push({
-          row: index + 2,
-          question: exampleQAData.question.substring(0, 50) + (exampleQAData.question.length > 50 ? '...' : ''),
-          status: 'SUCCESS',
-          message: 'Thành công'
-        });
-
-      } catch (error: any) {
-        const rowNumber = index + 2;
-        const errorMessage = `Dòng ${rowNumber}: ${error.message}`;
-        
-        results.errors.push(errorMessage);
-        results.details.push({
-          row: rowNumber,
-          question: String((row as any)?.['Câu hỏi'] || (row as any)?.['question'] || 'N/A').substring(0, 50),
-          status: 'ERROR',
-          message: error.message
-        });
-      }
+  async importExampleQAs(file: Express.Multer.File, userEmail?: string) {
+    if (!file) {
+      throw new BadRequestException('File không được tìm thấy');
     }
 
-    return {
-      success: true,
-      message: `Import hoàn tất: ${results.success}/${results.total} bản ghi thành công`,
-      data: results
-    };
-
-  } catch (error: any) {
-    throw new BadRequestException('Lỗi khi xử lý file Excel: ' + error.message);
-  }
-}
-
-  async exportExampleQAs() {
     try {
+      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(worksheet);
+
+      const results = {
+        total: data.length,
+        success: 0,
+        errors: [] as string[],
+        details: [] as any[]
+      };
+
+      // Lấy tất cả câu hỏi hiện có để check trùng
+      const where: any = {};
+      if (userEmail) {
+        where.ownerEmail = userEmail; // Chỉ kiểm tra trùng trong cùng owner
+      }
+
+      const existingQAs = await this.prisma.exampleQA.findMany({
+        where,
+        select: { question: true }
+      });
+      const existingQuestions = new Set(existingQAs.map(qa => qa.question.toLowerCase().trim()));
+
+      for (const [index, row] of data.entries()) {
+        try {
+          const rowData = row as Record<string, any>;
+          
+          // Map Excel columns to ExampleQA data
+          const exampleQAData: CreateExampleQADto = {
+            question: String(rowData['Câu hỏi'] || rowData['question'] || '').trim(),
+            answer: String(rowData['Câu trả lời'] || rowData['answer'] || '').trim(),
+            intent: rowData['Mục đích'] || rowData['intent'] ? String(rowData['Mục đích'] || rowData['intent']).trim() : undefined,
+            category: rowData['Danh mục'] || rowData['category'] ? String(rowData['Danh mục'] || rowData['category']).trim() : undefined,
+            language: rowData['Ngôn ngữ'] || rowData['language'] ? String(rowData['Ngôn ngữ'] || rowData['language']).trim() : 'vi',
+            isActive: rowData['Trạng thái'] || rowData['isActive'] !== undefined ? 
+              String(rowData['Trạng thái'] || rowData['isActive']).toString().toLowerCase() === 'true' : true,
+            tags: rowData['Tags'] || rowData['tags'] ? 
+              String(rowData['Tags'] || rowData['tags']).split(',').map((tag: string) => tag.trim()).filter(tag => tag !== '') : [],
+            ownerEmail: rowData['Owner Email'] || rowData['ownerEmail'] ? 
+              String(rowData['Owner Email'] || rowData['ownerEmail']).trim() : userEmail || undefined
+          };
+
+          // Validate required fields
+          if (!exampleQAData.question) {
+            throw new Error('Câu hỏi là bắt buộc');
+          }
+          if (!exampleQAData.answer) {
+            throw new Error('Câu trả lời là bắt buộc');
+          }
+
+          // Check trùng câu hỏi (case insensitive) - chỉ trong cùng owner
+          const normalizedQuestion = exampleQAData.question.toLowerCase().trim();
+          if (existingQuestions.has(normalizedQuestion)) {
+            throw new Error('Câu hỏi đã tồn tại trong hệ thống');
+          }
+
+          // Create example QA
+          await this.prisma.exampleQA.create({
+            data: {
+              question: exampleQAData.question,
+              answer: exampleQAData.answer,
+              intent: exampleQAData.intent,
+              category: exampleQAData.category,
+              language: exampleQAData.language,
+              isActive: exampleQAData.isActive,
+              tags: exampleQAData.tags,
+              ownerEmail: exampleQAData.ownerEmail, // Lưu ownerEmail
+            }
+          });
+
+          // Thêm vào set để tránh trùng trong cùng 1 file import
+          existingQuestions.add(normalizedQuestion);
+          
+          results.success++;
+          results.details.push({
+            row: index + 2,
+            question: exampleQAData.question.substring(0, 50) + (exampleQAData.question.length > 50 ? '...' : ''),
+            status: 'SUCCESS',
+            message: 'Thành công'
+          });
+
+        } catch (error: any) {
+          const rowNumber = index + 2;
+          const errorMessage = `Dòng ${rowNumber}: ${error.message}`;
+          
+          results.errors.push(errorMessage);
+          results.details.push({
+            row: rowNumber,
+            question: String((row as any)?.['Câu hỏi'] || (row as any)?.['question'] || 'N/A').substring(0, 50),
+            status: 'ERROR',
+            message: error.message
+          });
+        }
+      }
+
+      return {
+        success: true,
+        message: `Import hoàn tất: ${results.success}/${results.total} bản ghi thành công`,
+        data: results
+      };
+
+    } catch (error: any) {
+      throw new BadRequestException('Lỗi khi xử lý file Excel: ' + error.message);
+    }
+  }
+
+  async exportExampleQAs(ownerEmail?: string) {
+    try {
+      const where: any = {};
+      if (ownerEmail) {
+        where.ownerEmail = ownerEmail; // Lọc theo ownerEmail
+      }
+
       // Lấy tất cả example QAs từ database
       const exampleQAs = await this.prisma.exampleQA.findMany({
+        where,
         orderBy: { createdAt: 'desc' }
       });
 
@@ -295,6 +353,7 @@ export class ExampleQAService {
         'Danh mục': qa.category || '',
         'Ngôn ngữ': qa.language,
         'Tags': qa.tags.join(', '),
+        'Owner Email': qa.ownerEmail || '', // Thêm cột Owner Email
         'Trạng thái': qa.isActive ? 'ACTIVE' : 'INACTIVE',
         'Ngày tạo': this.formatDate(qa.createdAt),
         'Ngày cập nhật': this.formatDate(qa.updatedAt)
@@ -312,6 +371,7 @@ export class ExampleQAService {
         { wch: 20 }, // Danh mục
         { wch: 10 }, // Ngôn ngữ
         { wch: 30 }, // Tags
+        { wch: 25 }, // Owner Email (mới)
         { wch: 12 }, // Trạng thái
         { wch: 15 }, // Ngày tạo
         { wch: 15 }, // Ngày cập nhật
@@ -343,6 +403,7 @@ export class ExampleQAService {
           'Danh mục': 'giao_tiếp',
           'Ngôn ngữ': 'vi',
           'Tags': 'chào hỏi, sức khỏe',
+          'Owner Email': 'admin@example.com', // Thêm cột mẫu
           'Trạng thái': 'true'
         },
         {
@@ -352,6 +413,7 @@ export class ExampleQAService {
           'Danh mục': 'thông_tin_công_ty',
           'Ngôn ngữ': 'vi',
           'Tags': 'giờ làm, công ty',
+          'Owner Email': 'admin@example.com', // Thêm cột mẫu
           'Trạng thái': 'true'
         }
       ];
@@ -363,7 +425,7 @@ export class ExampleQAService {
       // Auto-size columns
       const colWidths = [
         { wch: 40 }, { wch: 40 }, { wch: 20 }, { wch: 20 }, 
-        { wch: 10 }, { wch: 20 }, { wch: 12 }
+        { wch: 10 }, { wch: 20 }, { wch: 25 }, { wch: 12 } // Thêm cột Owner Email
       ];
       worksheet['!cols'] = colWidths;
       
@@ -387,4 +449,5 @@ export class ExampleQAService {
     if (!date) return '';
     return date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
   }
+
 }

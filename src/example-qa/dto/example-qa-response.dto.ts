@@ -7,6 +7,7 @@ export class ExampleQAResponseDto {
   language: string;
   isActive: boolean;
   tags: string[];
+  ownerEmail?: string; 
   createdAt: Date;
   updatedAt: Date;
 
@@ -19,6 +20,7 @@ export class ExampleQAResponseDto {
     this.language = exampleQA.language;
     this.isActive = exampleQA.isActive;
     this.tags = exampleQA.tags;
+     this.ownerEmail = exampleQA.ownerEmail ?? undefined;
     this.createdAt = exampleQA.createdAt;
     this.updatedAt = exampleQA.updatedAt;
   }
