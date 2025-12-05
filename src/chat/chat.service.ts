@@ -185,18 +185,34 @@ async handleChat(body: any) {
   const convId = await this.getOrCreateConv(conversationId, prompt);
   await this.saveUserMessage(convId, prompt);
 
-  // 🎯 PHÂN TÍCH: Đây có phải câu hỏi về SẢN PHẨM không?
-  console.log('🔍 Step 1: Check if this is a PRODUCT question');
+  // 1️⃣ PHÂN TÍCH TỪ KHÓA
   const keywordAnalysis = this.analyzeQuestionKeywords(prompt);
   console.log('🔍 Categories:', keywordAnalysis.categories);
-  console.log('🔍 Keywords:', keywordAnalysis.specificQuestions);
 
-  // 🎯 QUYẾT ĐỊNH FLOW: Sản phẩm → AI, Khác → QA trước
+  // 2️⃣ KIỂM TRA LOẠI CÂU HỎI
+  // - Có phải hỏi sản phẩm không?
   const isProductQuestion = this.isProductQuestion(prompt, keywordAnalysis.categories);
   
-  if (isProductQuestion) {
-    console.log('🎯 Step 2: PRODUCT QUESTION → Going straight to AI');
+  // - 🆕 Có phải câu xã giao (Chào/Cảm ơn/Tạm biệt) không?
+  const socialCategories = ['greeting', 'thanks', 'goodbye'];
+  const isSocialInteraction = keywordAnalysis.categories.some(cat => 
+    socialCategories.includes(cat)
+  );
+
+  // 3️⃣ QUYẾT ĐỊNH LUỒNG XỬ LÝ
+  // ✅ NẾU LÀ SẢN PHẨM HOẶC XÃ GIAO => GỌI AI LUÔN (Bỏ qua QA DB)
+  if (isProductQuestion || isSocialInteraction) {
+    console.log(`🎯 Step 2: ${isProductQuestion ? 'PRODUCT' : 'SOCIAL'} DETECTED → Going straight to AI`);
+    
+    // Gọi AI (AI sẽ tự handle logic chào hỏi hoặc tìm sản phẩm)
     const context = await this.analyzeContext(prompt, metadata, ownerEmail);
+    
+    // ⚠️ Quan trọng: Nếu là Social, ép userIntent thành general_chat để tránh tìm QA lại trong analyzeContext
+    if (isSocialInteraction && !isProductQuestion) {
+       context.userIntent = 'general_chat'; 
+       context.qaMatch = null; // Đảm bảo không match QA
+    }
+
     const result = await this.generateAIResponse(prompt, context, ownerEmail, metadata);
 
     const msg = await this.saveAssistantMessage(
@@ -220,19 +236,23 @@ async handleChat(body: any) {
           questionCategories: context.questionCategories,
           specificQuestions: context.specificQuestions,
           hasSlug: metadata?.slug && metadata.slug !== 'none',
-          isProductQuestion: true,
+          isProductQuestion: isProductQuestion,
+          isSocial: isSocialInteraction // Flag để debug
         }
       },
       usage: result.metadata?.usage || {},
     };
-  } else {
-    console.log('🎯 Step 2: NON-PRODUCT QUESTION → Checking QA first');
-    // 🎯 ƯU TIÊN TÌM QA CHO CÂU HỎI KHÔNG PHẢI SẢN PHẨM
+  } 
+  
+  // ⛔ NẾU KHÔNG PHẢI SẢN PHẨM/XÃ GIAO => TÌM TRONG QA TRƯỚC
+  else {
+    console.log('🎯 Step 2: POLICY/OTHER QUESTION → Checking QA first');
+    
+    // Tìm trong bảng ExampleQA (cho các câu hỏi chính sách, vận chuyển,...)
     const qaMatch = await this.findQAMatch(prompt, ownerEmail);
     
     if (qaMatch) {
       console.log('✅ Found QA match, returning QA answer');
-      console.log('✅ QA Answer:', qaMatch.answer);
       
       const msg = await this.saveAssistantMessage(
         convId,
@@ -261,7 +281,8 @@ async handleChat(body: any) {
       };
     }
 
-    console.log('❌ No QA match found, using AI for non-product question');
+    // Nếu không tìm thấy trong QA, fallback về AI
+    console.log('❌ No QA match found, using AI for general question');
     const context = await this.analyzeContext(prompt, metadata, ownerEmail);
     const result = await this.generateAIResponse(prompt, context, ownerEmail, metadata);
 
@@ -436,6 +457,18 @@ private async findQAMatch(prompt: string, ownerEmail?: string): Promise<any> {
     console.log(`🔍 Searching QA for: "${prompt}"`);
     
     // 🚨 KIỂM TRA TRƯỚC: Đây có phải câu hỏi về sản phẩm không?
+    // 🆕 1. KIỂM TRA SOCIAL FIRST: Nếu là chào hỏi/cảm ơn -> Bỏ qua QA DB để AI trả lời cho tự nhiên
+    const keywordAnalysis = this.analyzeQuestionKeywords(prompt);
+    const socialCategories = ['greeting', 'thanks', 'goodbye'];
+    const isSocialOnly = keywordAnalysis.categories.length > 0 && 
+                         keywordAnalysis.categories.every(cat => socialCategories.includes(cat));
+
+    // Nếu chỉ là chào hỏi (VD: "chào shop", "cảm ơn") -> Return null để AI xử lý
+    if (isSocialOnly) {
+       console.log('🗣️ Social interaction detected, skipping QA DB to use AI personality');
+       return null;
+    }
+
     if (this.isProductQuestion(prompt, [])) {
       console.log('🚫 Skipping QA - this is a product question');
       return null;
@@ -539,8 +572,6 @@ private extractNonProductKeywords(prompt: string): string[] {
     'thanh toán', 'cod', 'chuyển khoản', 'tiền mặt',
     'đổi trả', 'bảo hành', 'chính sách',
     'liên hệ', 'hotline', 'zalo', 'facebook', 'email',
-    'trả lời', 'nhắn tin', 'check tin',
-    'shop', 'cửa hàng', 'store', 'kho hàng',
     'chi nhánh', 'tỉnh', 'thành phố', 'quận'
   ];
   
