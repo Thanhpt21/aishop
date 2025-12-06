@@ -639,8 +639,8 @@ private async generateAIResponse(
     
     try {
       const ai = await this.openai.callOpenAI(aiPrompt, {
-        maxTokens: 150,
-        temperature: 0.75,
+        maxTokens: 250,
+        temperature: 0.7,
       });
 
       const answer = ai.text.trim();
@@ -726,7 +726,7 @@ private getFallbackResponse(prompt: string, context: ChatContext): any {
   } else if (context.userIntent === 'product_inquiry') {
     if (context.currentProducts.length > 0) {
       const product = context.currentProducts[0];
-      fallbackAnswer = `Về sản phẩm ${product.name} (${this.fmt(product.price)}), tôi chưa có đủ thông tin để tư vấn chi tiết. Bạn vui lòng liên hệ shop để được tư vấn kỹ hơn nhé! 📦`;
+      fallbackAnswer = `Về sản phẩm ${product.name} (${this.fmt(product.price)}). Bạn vui lòng liên hệ shop để được tư vấn kỹ hơn nhé! 📦`;
     } else if (context.searchKeyword) {
       fallbackAnswer = `Shop hiện chưa có sản phẩm "${context.searchKeyword}" bạn tìm. Bạn có thể xem các sản phẩm khác hoặc liên hệ shop để đặt hàng riêng nhé! 🛍️`;
     } else {
@@ -869,7 +869,7 @@ private buildProductInfoPrompt(products: any[], metadata: any): string {
     }
     
     if (p.description) {
-      prompt += `   ${p.description.substring(0, 120)}...\n`;
+      prompt += `   ${p.description.substring(0, 200)}...\n`;
     }
   });
   prompt += `\n`;
