@@ -523,7 +523,7 @@ private classifyIntent(
     ownerEmail?: string
   ): Promise<any[]> {
     // 1. Slug từ URL
-    if (urlSlug && urlSlug !== 'none') {
+    if (urlSlug && urlSlug !== 'none') {    
       const product = await this.findBySlug(urlSlug, ownerEmail);
       if (product) {
         return [product];
@@ -1062,7 +1062,11 @@ private buildDynamicAIPrompt(prompt: string, context: ChatContext, metadata: any
     systemPrompt += `\n🔗 KHÁCH HỎI VỀ LINK - PHẢI TRẢ LINK:\n`;
     systemPrompt += `- Khách muốn xem link/chi tiết sản phẩm\n`;
     systemPrompt += `- BẮT BUỘC thêm slug sau tên sản phẩm\n`;
-    systemPrompt += `- Format: "Tên sản phẩm (giá) \`slug-san-pham\`"\n\n`;
+    systemPrompt += `- Format: "Tên sản phẩm (giá) \`${context.currentProducts[0]?.slug}\`"\n\n`;
+    systemPrompt += `\n🔗 QUAN TRỌNG VỀ SLUG:\n`;
+    systemPrompt += `- PHẢI sử dụng slug đầy đủ từ database\n`;
+    systemPrompt += `- KHÔNG được tự ý rút gọn hoặc thay đổi slug\n`;
+    systemPrompt += `- Slug phải giống y hệt: ${context.currentProducts[0]?.slug}\n\n`;
   }
 
   systemPrompt += `\n⚠️ QUAN TRỌNG - NẾU KHÔNG BIẾT:\n`;
