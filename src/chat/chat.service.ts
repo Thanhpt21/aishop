@@ -597,34 +597,298 @@ private async searchProductsByKeyword(
 
 
 private getKeywordMappings(keyword: string): string[] {
-  const lowerKeyword = keyword.toLowerCase();
-  const mappings: Record<string, string[]> = {
-    'áo': ['áo', 'shirt', 't-shirt', 'tee', 'tshirt', 'thun'],
-    'ao': ['áo', 'shirt', 't-shirt', 'tee', 'tshirt', 'thun'],
-    'thun': ['thun', 't-shirt', 'tee', 'cotton'],
-    'áo thun': ['áo thun', 't-shirt', 'tee shirt', 'cotton shirt'],
-    'quần': ['quần', 'pants', 'trousers', 'jeans', 'shorts'],
-    'quan': ['quần', 'pants', 'trousers', 'jeans', 'shorts'],
-    'jean': ['jean', 'denim', 'quần jean'],
-    'giày': ['giày', 'shoes', 'sneakers', 'boots'],
-    'giay': ['giày', 'shoes', 'sneakers', 'boots'],
-    'dep': ['dép', 'sandals', 'flip flops'],
-    'dép': ['dép', 'sandals', 'flip flops'],
-    'găng tay': ['găng tay', 'gloves', 'bao tay'],
-    'gang tay': ['găng tay', 'gloves', 'bao tay'],
-    'vớ': ['vớ', 'socks', 'tất'],
-    'vo': ['vớ', 'socks', 'tất'],
-    'mũ': ['mũ', 'hat', 'cap', 'nón'],
-    'mu': ['mũ', 'hat', 'cap', 'nón'],
-  };
+  const lowerKeyword = keyword.toLowerCase();
+  const mappings: Record<string, string[]> = {
+    // ============ ÁO ============
+    'áo': ['áo', 'shirt', 'top', 'tee', 'tshirt', 'thun', 'ao'],
+    'ao': ['áo', 'shirt', 'top', 'tee', 'tshirt', 'thun', 'ao'],
+    'áo thun': ['áo thun', 't-shirt', 'tee shirt', 'cotton shirt', 'tank top', 'sleeveless'],
+    'áo sơ mi': ['áo sơ mi', 'dress shirt', 'formal shirt', 'button-down', 'somi'],
+    'áo sơ mi nam': ['áo sơ mi nam', 'men shirt', 'business shirt'],
+    'áo sơ mi nữ': ['áo sơ mi nữ', 'women blouse', 'ladies shirt'],
+    'áo polo': ['áo polo', 'polo shirt', 'tennis shirt', 'golf shirt'],
+    'áo khoác': ['áo khoác', 'jacket', 'outerwear', 'coat', 'blazer', 'windbreaker'],
+    'áo len': ['áo len', 'sweater', 'jumper', 'pullover', 'wool'],
+    'áo hoodie': ['áo hoodie', 'hooded sweater', 'hoodie', 'sweatshirt'],
+    'áo cardigan': ['áo cardigan', 'cardigan', 'knit jacket'],
+    'áo vest': ['áo vest', 'vest', 'waistcoat'],
+    'áo bò': ['áo bò', 'denim shirt', 'jeans shirt'],
+    'áo phông': ['áo phông', 't-shirt', 'cotton tee'],
+    'áo ba lỗ': ['áo ba lỗ', 'tank top', 'sleeveless'],
+    'áo croptop': ['áo croptop', 'crop top', 'short top'],
+    'áo dài': ['áo dài', 'vietnamese dress', 'traditional'],
+    'áo kiểu': ['áo kiểu', 'fashion top', 'designer top'],
+    'áo tay dài': ['áo tay dài', 'long sleeve'],
+    'áo tay ngắn': ['áo tay ngắn', 'short sleeve'],
+    'áo tay lỡ': ['áo tay lỡ', 'three-quarter sleeve'],
+    'áo cổ lọ': ['áo cổ lọ', 'turtle neck', 'polo neck'],
+    'áo cổ tròn': ['áo cổ tròn', 'crew neck', 'round neck'],
+    'áo cổ tim': ['áo cổ tim', 'v-neck'],
+    'áo cổ thuyền': ['áo cổ thuyền', 'boat neck'],
+    'áo cổ vuông': ['áo cổ vuông', 'square neck'],
 
-  return mappings[lowerKeyword] || [];
+    // ============ QUẦN ============
+    'quần': ['quần', 'pants', 'trousers', 'jeans', 'shorts', 'quan'],
+    'quan': ['quần', 'pants', 'trousers', 'jeans', 'shorts', 'quan'],
+    'quần jean': ['quần jean', 'jeans', 'denim pants', 'blue jeans'],
+    'quần tây': ['quần tây', 'trousers', 'dress pants', 'slacks'],
+    'quần kaki': ['quần kaki', 'chinos', 'khaki pants'],
+    'quần short': ['quần short', 'shorts', 'bermuda', 'short pants'],
+    'quần jogger': ['quần jogger', 'joggers', 'sweatpants'],
+    'quần legging': ['quần legging', 'leggings', 'yoga pants'],
+    'quần ống rộng': ['quần ống rộng', 'wide leg', 'baggy'],
+    'quần ống suông': ['quần ống suông', 'straight leg'],
+    'quần ống côn': ['quần ống côn', 'tapered', 'skinny'],
+    'quần ống loe': ['quần ống loe', 'flare', 'bell bottom'],
+    'quần culottes': ['quần culottes', 'culottes', 'wide-leg shorts'],
+    'quần váy': ['quần váy', 'skirt pants', 'palazzo'],
+    'quần yếm': ['quần yếm', 'overalls', 'dungarees'],
+    'quần boxer': ['quần boxer', 'boxer shorts', 'underwear'],
+    'quần lót': ['quần lót', 'underwear', 'briefs', 'boxers'],
+    'quần thể thao': ['quần thể thao', 'sport pants', 'training pants'],
+
+    // ============ VÁY - ĐẦM ============
+    'váy': ['váy', 'skirt', 'dress'],
+    'đầm': ['đầm', 'dress', 'gown', 'frock'],
+    'đầm dự tiệc': ['đầm dự tiệc', 'party dress', 'evening gown'],
+    'đầm công sở': ['đầm công sở', 'office dress', 'work dress'],
+    'đầm maxi': ['đầm maxi', 'maxi dress', 'long dress'],
+    'đầm midi': ['đầm midi', 'midi dress', 'knee-length'],
+    'đầm mini': ['đầm mini', 'mini dress', 'short dress'],
+    'đầm body': ['đầm body', 'bodycon dress', 'fitted dress'],
+    'đầm xòe': ['đầm xòe', 'flare dress', 'a-line dress'],
+    'đầm ôm': ['đầm ôm', 'tight dress', 'fitted dress'],
+    'váy ngắn': ['váy ngắn', 'mini skirt', 'short skirt'],
+    'váy dài': ['váy dài', 'long skirt', 'maxi skirt'],
+    'váy chữ a': ['váy chữ a', 'a-line skirt'],
+    'váy xếp ly': ['váy xếp ly', 'pleated skirt'],
+    'váy jeans': ['váy jeans', 'denim skirt'],
+    'váy tutu': ['váy tutu', 'tutu skirt', 'ballet skirt'],
+
+    // ============ GIÀY - DÉP ============
+    'giày': ['giày', 'shoes', 'footwear', 'giay'],
+    'giay': ['giày', 'shoes', 'footwear', 'giay'],
+    'giày thể thao': ['giày thể thao', 'sneakers', 'athletic shoes', 'trainers'],
+    'giày sneaker': ['giày sneaker', 'sneakers', 'casual shoes'],
+    'giày cao gót': ['giày cao gót', 'high heels', 'heels', 'stilettos'],
+    'giày búp bê': ['giày búp bê', 'mary janes', 'doll shoes'],
+    'giày boot': ['giày boot', 'boots', 'ankle boots'],
+    'giày lười': ['giày lười', 'loafers', 'slip-ons'],
+    'giày oxford': ['giày oxford', 'oxford shoes', 'dress shoes'],
+    'giày sandal': ['giày sandal', 'sandals', 'open toe'],
+    'giày dép': ['giày dép', 'sandals', 'flip-flops'],
+    'dép': ['dép', 'sandals', 'flip-flops', 'slippers'],
+    'dép quai hậu': ['dép quai hậu', 'sandals', 'strap sandals'],
+    'dép lào': ['dép lào', 'flip-flops', 'thongs'],
+    'dép bệt': ['dép bệt', 'flat sandals'],
+    'dép cao gót': ['dép cao gót', 'heeled sandals'],
+    'giày da': ['giày da', 'leather shoes'],
+    'giày vải': ['giày vải', 'canvas shoes', 'fabric shoes'],
+    'giày chạy bộ': ['giày chạy bộ', 'running shoes'],
+    'giày bóng đá': ['giày bóng đá', 'soccer shoes', 'football boots'],
+    'giày bóng rổ': ['giày bóng rổ', 'basketball shoes'],
+
+    // ============ MŨ - NÓN ============
+    'mũ': ['mũ', 'hat', 'cap', 'nón', 'mu'],
+    'mu': ['mũ', 'hat', 'cap', 'nón', 'mu'],
+    'nón': ['nón', 'hat', 'cap', 'mũ'],
+    'mũ lưỡi trai': ['mũ lưỡi trai', 'baseball cap', 'cap'],
+    'mũ bucket': ['mũ bucket', 'bucket hat', 'fishing hat'],
+    'mũ beret': ['mũ beret', 'beret', 'french hat'],
+    'mũ len': ['mũ len', 'beanie', 'winter hat', 'wool hat'],
+    'mũ rộng vành': ['mũ rộng vành', 'wide brim hat', 'sun hat'],
+    'nón bảo hiểm': ['nón bảo hiểm', 'helmet'],
+    'nón kết': ['nón kết', 'straw hat', 'summer hat'],
+
+    // ============ TÚI - VÍ ============
+    'túi': ['túi', 'bag', 'purse', 'handbag'],
+    'ví': ['ví', 'wallet', 'purse'],
+    'túi xách': ['túi xách', 'handbag', 'purse'],
+    'túi đeo chéo': ['túi đeo chéo', 'crossbody bag', 'shoulder bag'],
+    'túi tote': ['túi tote', 'tote bag', 'shopping bag'],
+    'túi backpack': ['túi backpack', 'backpack', 'rucksack'],
+    'túi clutch': ['túi clutch', 'clutch bag', 'evening bag'],
+    'túi bucket': ['túi bucket', 'bucket bag'],
+    'túi mini': ['túi mini', 'mini bag', 'small bag'],
+    'ví nam': ['ví nam', 'men wallet', 'leather wallet'],
+    'ví nữ': ['ví nữ', 'women wallet', 'ladies wallet'],
+    'ví da': ['ví da', 'leather wallet'],
+
+    // ============ PHỤ KIỆN ============
+    'phụ kiện': ['phụ kiện', 'accessories', 'fashion accessories'],
+    'thắt lưng': ['thắt lưng', 'belt', 'waist belt'],
+    'khăn': ['khăn', 'scarf', 'shawl', 'wrap'],
+    'khăn quàng cổ': ['khăn quàng cổ', 'scarf', 'neck scarf'],
+    'khăn tay': ['khăn tay', 'handkerchief'],
+    'cà vạt': ['cà vạt', 'tie', 'neck tie'],
+    'nơ': ['nơ', 'bow', 'hair bow'],
+    'vòng cổ': ['vòng cổ', 'necklace', 'choker'],
+    'vòng tay': ['vòng tay', 'bracelet', 'bangle'],
+    'vòng chân': ['vòng chân', 'anklet'],
+    'bông tai': ['bông tai', 'earrings', 'ear studs'],
+    'nhẫn': ['nhẫn', 'ring', 'finger ring'],
+    'kính mát': ['kính mát', 'sunglasses', 'sun glasses'],
+    'kính cận': ['kính cận', 'glasses', 'spectacles'],
+    'găng tay': ['găng tay', 'gloves', 'hand gloves', 'bao tay'],
+    'gang tay': ['găng tay', 'gloves', 'hand gloves', 'bao tay'],
+    'bao tay': ['bao tay', 'gloves', 'găng tay'],
+    'tất': ['tất', 'socks', 'stockings'],
+    'vớ': ['vớ', 'socks', 'stockings'],
+    'vo': ['vớ', 'socks', 'stockings'],
+    'tất dài': ['tất dài', 'stockings', 'pantyhose'],
+    'tất lưới': ['tất lưới', 'fishnet stockings'],
+    'nịt bụng': ['nịt bụng', 'corset', 'waist trainer'],
+    'nịt vú': ['nịt vú', 'bra', 'bralette'],
+
+    // ============ ĐỒ LÓT ============
+    'đồ lót': ['đồ lót', 'underwear', 'lingerie'],
+    'áo lót': ['áo lót', 'bra', 'brassiere'],
+    'nội y': ['nội y', 'lingerie', 'underwear'],
+    'bodysuit': ['bodysuit', 'body suit', 'one-piece'],
+    'áo ngực': ['áo ngực', 'bra', 'brassiere'],
+
+    // ============ ĐỒ BƠI ============
+    'đồ bơi': ['đồ bơi', 'swimwear', 'bathing suit'],
+    'bikini': ['bikini', 'two-piece', 'swimsuit'],
+    'áo tắm': ['áo tắm', 'swimsuit', 'bathing suit'],
+    'quần bơi': ['quần bơi', 'swim trunks', 'bathing shorts'],
+
+    // ============ THỜI TRANG TRẺ EM ============
+    'đồ trẻ em': ['đồ trẻ em', 'kids clothing', 'children wear'],
+    'đồ sơ sinh': ['đồ sơ sinh', 'baby clothes', 'infant wear'],
+    'đồ bé trai': ['đồ bé trai', 'boys clothing'],
+    'đồ bé gái': ['đồ bé gái', 'girls clothing'],
+    'bộ bodysuit': ['bộ bodysuit', 'baby onesie'],
+
+    // ============ FORM DÁNG ============
+    'form': ['form', 'fit', 'cut', 'silhouette'],
+    'oversize': ['oversize', 'loose fit', 'baggy'],
+    'regular': ['regular', 'regular fit', 'standard fit'],
+    'slim': ['slim', 'slim fit', 'tight fit'],
+    'skinny': ['skinny', 'skinny fit', 'very tight'],
+    'relax': ['relax', 'relaxed fit', 'comfort fit'],
+    'boxy': ['boxy', 'square fit', 'straight cut'],
+
+    // ============ CHẤT LIỆU ============
+    'cotton': ['cotton', 'bông', 'vải cotton'],
+    'len': ['len', 'wool', 'dệt kim'],
+    'denim': ['denim', 'jeans', 'vải bò'],
+    'kaki': ['kaki', 'khaki', 'chino'],
+    'lụa': ['lụa', 'silk', 'lụa tơ tằm'],
+    'da': ['da', 'leather', 'genuine leather'],
+    'da lộn': ['da lộn', 'suede'],
+    'nỉ': ['nỉ', 'felt', 'fleece'],
+    'jean': ['jean', 'denim', 'vải jeans'],
+    'thun': ['thun', 'knit', 'jersey'],
+    'lưới': ['lưới', 'mesh', 'net'],
+    'voan': ['voan', 'chiffon', 'sheer'],
+    'nhung': ['nhung', 'velvet', 'velour'],
+    'lanh': ['lanh', 'linen', 'vải lanh'],
+    'polyester': ['polyester', 'poly', 'synthetic'],
+    'spandex': ['spandex', 'elastane', 'lycra'],
+
+    // ============ MÀU SẮC ============
+    'đen': ['đen', 'black'],
+    'trắng': ['trắng', 'white'],
+    'xám': ['xám', 'gray', 'grey'],
+    'xanh': ['xanh', 'blue', 'green'],
+    'xanh dương': ['xanh dương', 'blue', 'navy'],
+    'xanh lá': ['xanh lá', 'green', 'emerald'],
+    'đỏ': ['đỏ', 'red', 'crimson'],
+    'hồng': ['hồng', 'pink', 'rose'],
+    'tím': ['tím', 'purple', 'violet'],
+    'vàng': ['vàng', 'yellow', 'gold'],
+    'cam': ['cam', 'orange', 'tangerine'],
+    'nâu': ['nâu', 'brown', 'chocolate'],
+    'be': ['be', 'beige', 'tan'],
+    'kem': ['kem', 'cream', 'ivory'],
+    'pastel': ['pastel', 'soft color', 'light color'],
+    'hoạ tiết': ['hoạ tiết', 'pattern', 'print', 'design'],
+    'kẻ sọc': ['kẻ sọc', 'striped', 'stripes'],
+    'caro': ['caro', 'checkered', 'plaid'],
+    'chấm bi': ['chấm bi', 'polka dot', 'dots'],
+
+    // ============ THƯƠNG HIỆU ============
+    'nike': ['nike', 'swoosh'],
+    'adidas': ['adidas', 'three stripes'],
+    'gucci': ['gucci', 'luxury brand'],
+    'lv': ['lv', 'louis vuitton'],
+    'chanel': ['chanel', 'french luxury'],
+    'zara': ['zara', 'fast fashion'],
+    'h&m': ['h&m', 'hm', 'h and m'],
+    'uniqlo': ['uniqlo', 'japanese brand'],
+    'puma': ['puma', 'sport brand'],
+    'converse': ['converse', 'all star'],
+    'vans': ['vans', 'skate shoes'],
+    'levis': ['levis', 'levi\'s', 'jeans brand'],
+    'ck': ['ck', 'calvin klein'],
+
+    // ============ DỊP ============
+    'đi làm': ['đi làm', 'office', 'work', 'business'],
+    'đi chơi': ['đi chơi', 'casual', 'hangout', 'outing'],
+    'dự tiệc': ['dự tiệc', 'party', 'event', 'gala'],
+    'đi học': ['đi học', 'school', 'university', 'campus'],
+    'du lịch': ['du lịch', 'travel', 'vacation', 'holiday'],
+    'thể thao': ['thể thao', 'sport', 'gym', 'workout'],
+    'cưới': ['cưới', 'wedding', 'bridal', 'marriage'],
+    'mùa hè': ['mùa hè', 'summer', 'hot weather'],
+    'mùa đông': ['mùa đông', 'winter', 'cold weather'],
+    'mùa thu': ['mùa thu', 'autumn', 'fall'],
+    'mùa xuân': ['mùa xuân', 'spring'],
+
+    // ============ TÍNH NĂNG ============
+    'chống nước': ['chống nước', 'waterproof', 'water-resistant'],
+    'chống UV': ['chống UV', 'UV protection', 'sun protection'],
+    'thoáng khí': ['thoáng khí', 'breathable', 'airy'],
+    'co giãn': ['co giãn', 'stretch', 'elastic'],
+    'giữ ấm': ['giữ ấm', 'warm', 'insulated'],
+    'mát': ['mát', 'cool', 'lightweight'],
+    'bền': ['bền', 'durable', 'long-lasting'],
+    'dễ giặt': ['dễ giặt', 'easy care', 'washable'],
+    'không nhăn': ['không nhăn', 'wrinkle-free', 'non-iron'],
+
+    // ============ KÍCH THƯỚC ============
+    'size': ['size', 'kích thước', 'measurement'],
+    'S': ['S', 'small', 'nhỏ'],
+    'M': ['M', 'medium', 'vừa'],
+    'L': ['L', 'large', 'lớn'],
+    'XL': ['XL', 'extra large', 'rất lớn'],
+    'XS': ['XS', 'extra small', 'rất nhỏ'],
+    'XXL': ['XXL', 'double extra large'],
+    'free size': ['free size', 'one size', 'uni-size'],
+
+    // ============ TỪ KHÓA CHUNG ============
+    'thời trang': ['thời trang', 'fashion', 'style', 'trend'],
+    'thời trang nam': ['thời trang nam', 'men fashion', 'menswear'],
+    'thời trang nữ': ['thời trang nữ', 'women fashion', 'womenswear'],
+    'phong cách': ['phong cách', 'style', 'look', 'aesthetic'],
+    'bộ sưu tập': ['bộ sưu tập', 'collection', 'line'],
+    'hàng mới': ['hàng mới', 'new arrival', 'latest'],
+    'sale': ['sale', 'giảm giá', 'discount', 'khuyến mãi'],
+    'giá rẻ': ['giá rẻ', 'cheap', 'affordable', 'budget'],
+    'cao cấp': ['cao cấp', 'premium', 'luxury', 'high-end'],
+    'basic': ['basic', 'cơ bản', 'essential'],
+    'trendy': ['trendy', 'hợp thời', 'hot trend'],
+    'vintage': ['vintage', 'retro', 'cổ điển'],
+    'streetwear': ['streetwear', 'urban', 'street style'],
+    'casual': ['casual', 'thường ngày', 'everyday'],
+    'formal': ['formal', 'trang trọng', 'official'],
+    'sporty': ['sporty', 'thể thao', 'athleisure'],
+    'elegant': ['elegant', 'thanh lịch', 'sophisticated'],
+    'sexy': ['sexy', 'quyến rũ', 'seductive'],
+    'cute': ['cute', 'dễ thương', 'adorable'],
+  };
+
+  // Tìm kiếm không chỉ exact match mà còn partial match
+  for (const [key, synonyms] of Object.entries(mappings)) {
+    if (lowerKeyword.includes(key) || key.includes(lowerKeyword)) {
+      return synonyms;
+    }
+  }
+
+  return [];
 }
 
-// Hàm fuzzy search không còn được sử dụng
-private async fuzzySearchProducts(): Promise<any[]> {
-    return []; 
-}
 
 // --- Các hàm hỗ trợ AI (Đã bỏ console.log) ---
 
@@ -1111,8 +1375,7 @@ private buildDefaultProductGuidance(products: any[]): string {
   return `📦 TƯ VẤN SẢN PHẨM CHI TIẾT:
 - Giới thiệu sản phẩm phù hợp nhất
 - Nêu 3-4 ưu điểm nổi bật
-- Đề xuất cách sử dụng/phối đồ
-- Kết thúc bằng lời mời: "Bạn có muốn biết thêm về size/màu không?"\n`;
+- Đề xuất cách sử dụng/phối đồ"\n`;
 }
 
   private async extractProductsFromHistory(
