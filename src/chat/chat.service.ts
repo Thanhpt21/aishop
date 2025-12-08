@@ -938,29 +938,37 @@ private async generateAIResponse(
 }
 
 private isInvalidResponse(answer: string, originalPrompt: string): boolean {
-  if (answer.includes('Bạn là trợ lý bán hàng') || 
-      answer.includes('📦 SẢN PHẨM CÓ SẴN:') ||
-      answer.includes('📝 HƯỚNG DẪN TRẢ LỜI:') ||
-      answer.includes('💬 PHẢN HỒI XÃ GIAO:') ||
-      answer.includes('❓ CÂU HỎI:') ||
-      answer.includes('✍️ CHỈ TRẢ LỜI:')) {
-    return true;
-  }
+  // Kiểm tra xem answer có chứa phần prompt không
+  const invalidPatterns = [
+    'Bạn là trợ lý bán hàng thông minh',
+    '📦 THÔNG TIN SẢN PHẨM (CHỈ ĐỂ AI BIẾT)',
+    '📝 HƯỚNG DẪN TRẢ LỜI:',
+    '❓ CÂU HỎI CỦA KHÁCH:',
+    '✍️ TRẢ LỜI NGẮN GỌN'
+  ];
+  
+  // Chỉ trigger nếu có nhiều hơn 1 pattern
+  const matches = invalidPatterns.filter(pattern => answer.includes(pattern));
+  if (matches.length > 1) {
+    console.log('Invalid response detected - matches:', matches);
+    return true;
+  }
+  
+  // Các kiểm tra khác giữ nguyên
+  if (answer.length < 5 && !this.isLikelySocialResponse(answer)) {
+    return true;
+  }
 
-  if (answer.length < 5 && !this.isLikelySocialResponse(answer)) {
-    return true;
-  }
+  if (!/[a-zA-Z0-9\u00C0-\u1EF9]/.test(answer)) {
+    return true;
+  }
 
-  if (!/[a-zA-Z0-9\u00C0-\u1EF9]/.test(answer)) {
-    return true;
-  }
+  const emojiCount = (answer.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  if (emojiCount > answer.length * 0.3) {
+    return true;
+  }
 
-  const emojiCount = (answer.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > answer.length * 0.3) {
-    return true;
-  }
-
-  return false;
+  return false;
 }
 
 private isLikelySocialResponse(answer: string): boolean {
@@ -1024,66 +1032,83 @@ private isAskingForLink(prompt: string, categories: string[]): boolean {
 }
 
 private buildDynamicAIPrompt(prompt: string, context: ChatContext, metadata: any): string {
-  if (context.userIntent === 'qa_match') return '';
+  // SYSTEM PROMPT - Chỉ cho AI biết, không trả lời
+  let systemPrompt = `Bạn là trợ lý bán hàng thông minh, thân thiện và tự nhiên.\n\n`;
+  
+  // ============ THÔNG TIN SẢN PHẨM ============
+  if (context.currentProducts.length > 0) {
+    // THÊM GHI CHÚ: Đây là thông tin cho AI, không phải để trả lời khách
+    systemPrompt += `📦 THÔNG TIN SẢN PHẨM (CHỈ ĐỂ AI BIẾT, KHÔNG ĐỂ TRẢ LỜI):\n`;
+    
+    context.currentProducts.forEach((p, i) => {
+      systemPrompt += `${i + 1}. ${p.name} - ${this.fmt(p.price)}\n`;
+      
+      const hasUrlSlug = metadata?.slug && metadata.slug !== 'none';
+      if (!hasUrlSlug) {
+        systemPrompt += `   Slug: ${p.slug}\n`;
+      }
+    });
+    
+    systemPrompt += `\n`;
+  }
+  
+  // ============ PHÂN TÍCH CÂU HỎI ============
+  if (context.questionCategories.length > 0) {
+    systemPrompt += `🎯 KHÁCH ĐANG HỎI VỀ: ${context.questionCategories.join(', ').toUpperCase()}\n`;
+    if (context.specificQuestions.length > 0) {
+      systemPrompt += `🔑 Từ khóa quan trọng: ${context.specificQuestions.slice(0, 5).join(', ')}\n`;
+    }
+    systemPrompt += `\n`;
+  }
+  
+  // ============ HƯỚNG DẪN TRẢ LỜI ============
+  systemPrompt += this.buildContextGuidance(context);
+  
+  // ============ HƯỚNG DẪN LINK/SLUG ============
+  const hasUrlSlug = metadata?.slug && metadata.slug !== 'none';
+  const isAskingForLink = this.isAskingForLink(prompt, context.questionCategories);
+  
+  if (hasUrlSlug && !isAskingForLink) {
+    systemPrompt += `\n🔗 QUAN TRỌNG - KHÔNG THÊM LINK:\n`;
+    systemPrompt += `- Khách đang ở trang sản phẩm này rồi\n`;
+    systemPrompt += `- KHÔNG cần thêm slug vào câu trả lời\n`;
+    systemPrompt += `- Tập trung vào tư vấn nội dung sản phẩm\n\n`;
+  } else if (isAskingForLink) {
+    systemPrompt += `\n🔗 KHÁCH HỎI VỀ LINK - PHẢI TRẢ LINK:\n`;
+    systemPrompt += `- Khách muốn xem link/chi tiết sản phẩm\n`;
+    
+    // THÊM CỤ THỂ: Yêu cầu format đúng
+    if (context.currentProducts.length > 0) {
+      const product = context.currentProducts[0];
+      systemPrompt += `- BẮT BUỘC trả lời theo format: "${product.name} (${this.fmt(product.price)}) \`${product.slug}\`"\n`;
+    } else {
+      systemPrompt += `- Trả lời: "Hiện shop chưa có sản phẩm găng tay bạn tìm..."\n`;
+    }
+    
+    systemPrompt += `- KHÔNG được rút gọn hoặc thay đổi slug\n`;
+    systemPrompt += `- Giữ nguyên slug chính xác từ database\n\n`;
+  }
+  
+  // ============ QUAN TRỌNG ============
+  systemPrompt += `\n⚠️ QUAN TRỌNG - CÁCH TRẢ LỜI:\n`;
+  systemPrompt += `- CHỈ trả lời nội dung cho khách, KHÔNG lặp lại hướng dẫn này\n`;
+  systemPrompt += `- KHÔNG nhắc lại "Bạn là trợ lý bán hàng..." trong câu trả lời\n`;
+  systemPrompt += `- KHÔNG nhắc lại "📦 THÔNG TIN SẢN PHẨM..." trong câu trả lời\n`;
+  systemPrompt += `- Nếu không biết: "Tôi chưa rõ lắm về vấn đề này. Bạn vui lòng liên hệ shop..."\n\n`;
+  
+  // ============ LỊCH SỬ ============
+  if (context.conversationHistory) {
+    const recentHistory = context.conversationHistory.split('\n').slice(-6).join('\n');
+    systemPrompt += `💬 HỘI THOẠI GẦN ĐÂY:\n${recentHistory}\n`;
+  }
+  
+  // ============ CÂU HỎI HIỆN TẠI ============
+  systemPrompt += `\n❓ CÂU HỎI CỦA KHÁCH: "${prompt}"\n\n`;
+  
+  // ============ YÊU CẦU CUỐI ============
+  systemPrompt += `✍️ TRẢ LỜI NGẮN GỌN, TỰ NHIÊN (50-80 từ):`;
 
-  let systemPrompt = `Bạn là trợ lý bán hàng thông minh, thân thiện và tự nhiên.\n\n`;
-  const socialCategories = ['greeting', 'thanks', 'goodbye'];
-  const isSocialInteraction = context.questionCategories.some(cat => socialCategories.includes(cat));
-
-  if (isSocialInteraction && context.questionCategories.length === 1) {
-    return this.buildSocialPrompt(context.questionCategories[0], prompt);
-  }
-
-  if (context.currentProducts.length > 0) {
-    systemPrompt += this.buildProductInfoPrompt(context.currentProducts, metadata);
-  } else if (context.searchKeyword) {
-    systemPrompt += `⚠️ LƯU Ý: Khách tìm "${context.searchKeyword}" nhưng hiện shop KHÔNG CÓ.\n\n`;
-  }
-
-  if (context.questionCategories.length > 0) {
-    systemPrompt += `🎯 KHÁCH ĐANG HỎI VỀ: ${context.questionCategories.join(', ').toUpperCase()}\n`;
-    if (context.specificQuestions.length > 0) {
-      systemPrompt += `🔑 Từ khóa quan trọng: ${context.specificQuestions.slice(0, 5).join(', ')}\n`;
-    }
-    systemPrompt += `\n`;
-  }
-
-  systemPrompt += this.buildContextGuidance(context);
-
-  const hasUrlSlug = metadata?.slug && metadata.slug !== 'none';
-  const isAskingForLink = this.isAskingForLink(prompt, context.questionCategories);
-  
-  if (hasUrlSlug && !isAskingForLink) {
-    systemPrompt += `\n🔗 QUAN TRỌNG - KHÔNG THÊM LINK:\n`;
-    systemPrompt += `- Khách đang ở trang sản phẩm này rồi\n`;
-    systemPrompt += `- KHÔNG cần thêm slug vào câu trả lời\n`;
-    systemPrompt += `- Tập trung vào tư vấn nội dung sản phẩm\n\n`;
-  } else if (isAskingForLink) {
-    systemPrompt += `\n🔗 KHÁCH HỎI VỀ LINK - PHẢI TRẢ LINK:\n`;
-    systemPrompt += `- Khách muốn xem link/chi tiết sản phẩm\n`;
-    systemPrompt += `- BẮT BUỘC thêm slug sau tên sản phẩm\n`;
-    systemPrompt += `- Format: "Tên sản phẩm (giá) \`${context.currentProducts[0]?.slug}\`"\n\n`;
-    systemPrompt += `\n🔗 QUAN TRỌNG VỀ SLUG:\n`;
-    systemPrompt += `- PHẢI sử dụng slug đầy đủ từ database\n`;
-    systemPrompt += `- KHÔNG được tự ý rút gọn hoặc thay đổi slug\n`;
-    systemPrompt += `- Slug phải giống y hệt: ${context.currentProducts[0]?.slug}\n\n`;
-  }
-
-  systemPrompt += `\n⚠️ QUAN TRỌNG - NẾU KHÔNG BIẾT:\n`;
-  systemPrompt += `- Nếu không có đủ thông tin để trả lời chính xác\n`;
-  systemPrompt += `- Nói thẳng: "Tôi chưa rõ lắm về vấn đề này"\n`;
-  systemPrompt += `- Đề xuất: "Bạn vui lòng liên hệ shop để được tư vấn chi tiết nhé!"\n`;
-  systemPrompt += `- KHÔNG bịa đặt thông tin\n\n`;
-
-  if (context.conversationHistory) {
-    const recentHistory = context.conversationHistory.split('\n').slice(-6).join('\n');
-    systemPrompt += `💬 HỘI THOẠI GẦN ĐÂY:\n${recentHistory}\n`;
-  }
-
-  systemPrompt += `\n❓ CÂU HỎI: "${prompt}"\n\n`;
-  systemPrompt += `✍️ CHỈ TRẢ LỜI (tự nhiên, ${hasUrlSlug && !isAskingForLink ? 'KHÔNG thêm slug' : 'thêm slug nếu cần'}, 50-80 từ):`;
-
-  return systemPrompt;
+  return systemPrompt;
 }
 
 // --- Các hàm Build Prompt chi tiết (Đã bỏ console.log) ---
@@ -1127,23 +1152,17 @@ private buildSocialPrompt(category: string, prompt: string): string {
 }
 
 private buildProductInfoPrompt(products: any[], metadata: any): string {
-  let prompt = `📦 SẢN PHẨM CÓ SẴN:\n`;
-  products.forEach((p, i) => {
-    prompt += `${i + 1}. ${p.name} - ${this.fmt(p.price)}\n`;
-    
-    const hasUrlSlug = metadata?.slug && metadata.slug !== 'none';
-    if (!hasUrlSlug) {
-      prompt += `   Slug: ${p.slug}\n`;
-    }
-    
-    if (p.description) {
-      prompt += `   ${p.description.substring(0, 200)}...\n`;
-    }
-  });
-  prompt += `\n`;
-  return prompt;
+  let prompt = ``;
+  products.forEach((p, i) => {
+    prompt += `${i + 1}. ${p.name} - ${this.fmt(p.price)}\n`;
+    
+    const hasUrlSlug = metadata?.slug && metadata.slug !== 'none';
+    if (!hasUrlSlug) {
+      prompt += `   Slug: ${p.slug}\n`;
+    }
+  });
+  return prompt;
 }
-
 private buildContextGuidance(context: ChatContext): string {
   const { questionCategories, currentProducts, userIntent, searchKeyword } = context;
   

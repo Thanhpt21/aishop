@@ -19,7 +19,6 @@ model User {
   
   conversations Conversation[]
   messages      Message[]
-  trainingSessions TrainingSession[]   
   
   @@map("users")
 }
@@ -44,7 +43,7 @@ model Message {
   // SỬA QUAN HỆ - THÊM onDelete: SetNull
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
-  trainingData   TrainingData?
+
   
   @@index([conversationId])
   @@index([userId])
@@ -93,118 +92,6 @@ model PromptHash {
   @@map("prompt_hashes")
 }
 
-model TrainingSession {
-  id            String   @id @default(uuid())
-  name          String
-  description   String?
-  datasetConfig Json?
-  dataSource    String
-  modelType     String
-  modelName     String?
-  baseModel     String?
-  parameters    Json?
-  status        String    @default("pending")
-  progress      Float     @default(0)
-  currentStep   String?
-  accuracy      Float?
-  loss          Float?
-  metrics       Json?
-  confusionMatrix Json?
-  modelPath     String?
-  logsPath      String?
-  reportPath    String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  startedAt     DateTime?
-  completedAt   DateTime?
-  userId        String?
-  user          User?     @relation(fields: [userId], references: [id])
-  trainingData  TrainingData[]
-  evaluations   ModelEvaluation[]
-  deployedModels DeployedModel[] 
-  exampleQAs    ExampleQA[]
-  
-  @@index([userId])
-  @@index([status])
-  @@index([modelType])
-  @@index([createdAt])
-  @@map("training_sessions")
-}
-
-model TrainingData {
-  id                 String   @id @default(uuid())
-  messageId          String?  @unique  // ADDED: @unique for one-to-one
-  message            Message? @relation(fields: [messageId], references: [id])
-  input              String
-  output             String?
-  category           String?
-  intent             String?
-  qualityScore       Float?
-  isVerified         Boolean @default(false)
-  verifiedBy         String?
-  source             String
-  language           String   @default("vi")
-  difficulty         String?
-  trainingSessionId  String?
-  trainingSession    TrainingSession? @relation(fields: [trainingSessionId], references: [id])
-  metadata           Json?
-  createdAt          DateTime @default(now())
-  
-  @@index([messageId])
-  @@index([trainingSessionId])
-  @@index([category])
-  @@index([intent])
-  @@index([qualityScore])
-  @@map("training_data")
-}
-
-model ModelEvaluation {
-  id                 String   @id @default(uuid())
-  testDataset        Json?
-  metrics            Json
-  overallScore       Float?
-  details            Json?
-  trainingSessionId  String
-  trainingSession    TrainingSession @relation(fields: [trainingSessionId], references: [id])
-  createdAt          DateTime @default(now())
-  
-  @@index([trainingSessionId])
-  @@index([overallScore])
-  @@map("model_evaluations")
-}
-
-model DeployedModel {
-  id                 String   @id @default(uuid())
-  name               String
-  version            String
-  modelType          String
-  modelPath          String
-  isActive           Boolean @default(false)
-  accuracy           Float?
-  latency            Float?
-  trainingSessionId  String?
-  trainingSession    TrainingSession? @relation(fields: [trainingSessionId], references: [id])
-  createdAt          DateTime @default(now())
-  deployedAt         DateTime?
-  
-  @@unique([name, version])
-  @@index([isActive])
-  @@index([modelType])
-  @@map("deployed_models")
-}
-
-model TrainingConfig {
-  id                   String   @id @default(uuid())
-  name                 String   @unique
-  modelType            String
-  parameters           Json
-  preprocessingSteps   Json?
-  features             Json?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  
-  @@map("training_configs")
-}
 
 model ExampleQA {
   id          String   @id @default(uuid())
@@ -218,8 +105,6 @@ model ExampleQA {
   usageCount  Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
-  trainingSessions TrainingSession[]
   ownerEmail  String?
 
   @@index([intent])
@@ -258,6 +143,24 @@ model Product {
   @@map("products")
 }
 
+model KeywordPrompt {
+  id          Int      @id @default(autoincrement())
+  keyword     String   @db.VarChar(255) 
+  prompt      String   @db.Text 
+  sampleAnswer String  @db.Text 
+  additionalInfo String? @db.Text 
+  priority    Int      @default(0) 
+  ownerEmail  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([keyword])
+  @@index([ownerEmail])
+  @@index([priority])
+  
+  @@map("keyword_prompts")
+}
+
 model ApiKey {
   id        String   @id @default(uuid())
   key       String   @unique
@@ -265,13 +168,4 @@ model ApiKey {
   createdAt DateTime @default(now())
   
   @@map("api_keys")
-}
-
-model TrainingDataExport {
-  id        String   @id @default(uuid())
-  status    String
-  path      String?
-  createdAt DateTime @default(now())
-  
-  @@map("training_data_exports")
 }
