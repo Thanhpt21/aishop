@@ -370,55 +370,191 @@ export class KeywordPromptsService {
     }
   }
 
-  async exportTemplate() {
-    try {
-      const templateData = [
-        {
-          'Từ khóa': 'giới thiệu sản phẩm',
-          'Prompt': 'Hãy viết một đoạn giới thiệu ngắn gọn về sản phẩm {{product_name}} với các tính năng: {{features}}. Sản phẩm này phù hợp cho {{target_audience}}.',
-          'Câu trả lời mẫu': 'Chào bạn! {{product_name}} là sản phẩm hiện đại với các tính năng: {{features}}. Sản phẩm này hoàn toàn phù hợp với {{target_audience}} nhờ vào thiết kế thông minh và chất lượng vượt trội.',
-          'Thông tin bổ sung': 'Dùng cho mục đích marketing sản phẩm mới',
-          'Ưu tiên': 10,
-          'Email chủ sở hữu': 'admin@example.com'
-        },
-        {
-          'Từ khóa': 'trả lời khách hàng',
-          'Prompt': 'Khách hàng hỏi: {{customer_question}}. Hãy trả lời một cách chuyên nghiệp và hữu ích.',
-          'Câu trả lời mẫu': 'Cảm ơn bạn đã quan tâm! Về vấn đề {{customer_question}}, chúng tôi xin trả lời như sau: [nội dung trả lời chi tiết]. Nếu bạn cần thêm thông tin, vui lòng liên hệ với chúng tôi.',
-          'Thông tin bổ sung': 'Dùng cho bộ phận CSKH',
-          'Ưu tiên': 5,
-          'Email chủ sở hữu': 'support@example.com'
-        }
-      ];
+async exportTemplate() {
+  try {
+    const templateData = [
+      // I. KỊCH BẢN CHỐT SALE (THEO DẤU HIỆU MUA HÀNG)
+      {
+        'Từ khóa': 'giá bao nhiêu|sale|giảm giá|khuyến mãi|voucher',
+        'Prompt': 'Khách hỏi về giá sản phẩm và chương trình khuyến mãi. Hãy tạo urgency: sale chỉ còn 30 phút và đề nghị lấy thông tin.',
+        'Câu trả lời mẫu': '🎯 ƯU ĐÃI ĐỘC QUYỀN: Sản phẩm đang giảm 30% chỉ còn 30 phút nữa! Bạn có thể nhận thêm voucher 50k khi đặt hàng ngay. Để mình giữ ưu đãi này cho bạn, cho mình xin tên và số điện thoại nhé! 📱',
+        'Thông tin bổ sung': 'Kịch bản E - Tạo urgency với thời gian giới hạn',
+        'Ưu tiên': 10,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'ship hỏa tốc|giao nhanh|2 tiếng|trong ngày',
+        'Prompt': 'Khách yêu cầu giao hàng hỏa tốc trong 2 tiếng. Xác nhận khả năng và áp dụng ưu đãi freeship hỏa tốc.',
+        'Câu trả lời mẫu': '✅ SHIP HỎA TỐC 2H CÓ SẴN! Shop hỗ trợ giao siêu tốc trong 2 giờ khu vực nội thành. Đặc biệt: Đơn hỏa tốc này được MIỄN PHÍ SHIP 100%! Bạn cần lấy thông tin để xác nhận đơn ngay không ạ? 🚀',
+        'Thông tin bổ sung': 'Kịch bản E mục II - Freeship hỏa tốc',
+        'Ưu tiên': 9,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'cao 1m|nặng|kg|vòng eo|size nào|chọn size',
+        'Prompt': 'Khách cung cấp thông số cơ thể và hỏi size. Chốt size cụ thể và cam kết vừa vặn.',
+        'Câu trả lời mẫu': '👕 THEO THÔNG SỐ CỦA BẠN: Chiều cao 1m65, 55kg, eo 70cm - Size M sẽ vừa đẹp nhất! 🎯 CAM KẾT VỪA VẶN: Shop hỗ trợ ship 2 size M/L để bạn thử hoặc MIỄN PHÍ ĐỔI SIZE trọn đời nếu không vừa! Bạn muốn đặt size M chứ ạ?',
+        'Thông tin bổ sung': 'Kịch bản H - Cam kết vừa vặn',
+        'Ưu tiên': 8,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'mua 3|mua nhiều|cho cả nhà|combo|số lượng',
+        'Prompt': 'Khách muốn mua số lượng nhiều cho cả nhà. Áp dụng ưu đãi combo và thúc đẩy lấy thông tin.',
+        'Câu trả lời mẫu': '🎁 ƯU ĐÃI COMBO HẤP DẪN: Khi mua 3 sản phẩm trở lên, bạn được GIẢM THÊM 15% + TẶNG VOUCHER 100k cho lần mua sau! Đây là deal chỉ áp dụng cho đơn combo. Cho mình xin tên và SĐT để lưu đơn và ưu đãi nhé! 👨‍👩‍👧‍👦',
+        'Thông tin bổ sung': 'Kịch bản D - Ưu đãi combo',
+        'Ưu tiên': 7,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'cotton 100|chất liệu|vải|ship tỉnh|phí ship',
+        'Prompt': 'Khách hỏi chất liệu rồi ngay lập tức hỏi phí ship - dấu hiệu bỏ qua bước. Chuyển sang chốt sale ngay.',
+        'Câu trả lời mẫu': '✅ Chất liệu Cotton 100% cao cấp, co giãn 4 chiều. ⚡ VÀ NGAY BÂY GIỜ: Đơn hàng của bạn được Freeship toàn quốc + Giảm thêm 10% khi đặt ngay! Deal này chỉ có trong hôm nay. Bạn muốn nhận ưu đãi đặc biệt này chứ? 🚀',
+        'Thông tin bổ sung': 'Kịch bản K - Xử lý bỏ qua bước',
+        'Ưu tiên': 8,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'còn size|giá ship|bao lâu|còn hàng|có sẵn',
+        'Prompt': 'Khách hỏi liên tiếp 3 câu trong 1 lần chat. Tổng hợp và kết hợp ưu đãi để chốt đơn.',
+        'Câu trả lời mẫu': '💎 TỔNG HỢP THÔNG TIN CHO BẠN: 1) Size M còn 5 chiếc cuối 2) Giá XXXX 3) Ship 2-3 ngày. 🎯 ƯU ĐÃI TỔNG: Freeship + Giảm 10% = Chỉ còn XXXX! Bạn muốn đặt ngay để giữ size và nhận ưu đãi kép này không?',
+        'Thông tin bổ sung': 'Kịch bản L - Xử lý câu hỏi liên tiếp',
+        'Ưu tiên': 7,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
 
-      const worksheet = XLSX.utils.json_to_sheet(templateData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Template');
-      
-      const colWidths = [
-        { wch: 20 }, // Từ khóa
-        { wch: 40 }, // Prompt
-        { wch: 40 }, // Câu trả lời mẫu
-        { wch: 30 }, // Thông tin bổ sung
-        { wch: 10 }, // Ưu tiên
-        { wch: 25 }, // Email chủ sở hữu
-      ];
-      worksheet['!cols'] = colWidths;
-      
-      const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-      
-      return {
-        success: true,
-        message: 'Export template thành công',
-        data: {
-          buffer: buffer,
-          fileName: 'keyword_prompt_import_template.xlsx'
-        }
+      // II. KỊCH BẢN XỬ LÝ TỪ CHỐI
+      {
+        'Từ khóa': 'giá cao|đắt|so với|đối thủ|chỗ khác rẻ hơn',
+        'Prompt': 'Khách phàn nàn giá cao so với đối thủ. Nhấn mạnh giá trị, bảo hành và đưa ra nhượng bộ.',
+        'Câu trả lời mẫu': '💎 HIỂU BẠN HOÀN TOÀN! Nhưng sản phẩm của shop có BẢO HÀNH 1 NĂM + CAM KẾT CHỐNG XÙ LÔNG vĩnh viễn - đây là giá trị khác biệt! ⭐ NHƯỢNG BỘ ĐẶC BIỆT: Mình xin hỗ trợ thêm 5% cho đơn của bạn. Đây là mức tốt nhất mình có thể làm! Bạn đồng ý chứ?',
+        'Thông tin bổ sung': 'Kịch bản H mục III - Phản hồi dựa trên giá trị',
+        'Ưu tiên': 9,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'sợ xù lông|lo chất lượng|giặt bị|hư hỏng|rủi ro',
+        'Prompt': 'Khách lo lắng về chất lượng, sợ xù lông. Áp dụng cam kết không rủi ro.',
+        'Câu trả lời mẫu': '🛡️ CAM KẾT KHÔNG RỦI RO 100%: Nếu sản phẩm bị xù lông, phai màu, co rút trong 6 THÁNG - Shop HOÀN TIỀN 100% + tặng voucher 200k! Đã có 5000+ khách hàng tin tưởng. Bạn hoàn toàn yên tâm nhé!',
+        'Thông tin bổ sung': 'Kịch bản I mục III - Cam kết không rủi ro',
+        'Ưu tiên': 8,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'hỏi vợ|hỏi chồng|để sau|quay lại|suy nghĩ',
+        'Prompt': 'Khách cần hỏi ý kiến người thân, muốn quay lại sau. Tạo tính cấp thiết giả.',
+        'Câu trả lời mẫu': '⏰ ƯU ĐÃI GIỚI HẠN THỜI GIAN: Size M chỉ còn 3 chiếc và deal này chỉ còn hiệu lực 2 GIỜ nữa! Mình có thể GIỮ SIZE & ƯU ĐÃI cho bạn nếu bạn cho mình SĐT. NVKD sẽ gọi tư vấn cho cả 2 vợ chồng luôn ạ!',
+        'Thông tin bổ sung': 'Kịch bản J mục III - Tạo tính cấp thiết giả',
+        'Ưu tiên': 7,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+
+      // III. KỊCH BẢN BÀN GIAO & KẾT THÚC
+      {
+        'Từ khóa': 'tên tôi là|sđt của tôi|số điện thoại|liên hệ',
+        'Prompt': 'Khách cung cấp thông tin sau khi chốt đơn. Tóm tắt đơn hàng và bàn giao NVKD.',
+        'Câu trả lời mẫu': '🎉 CẢM ƠN BẠN [Tên]! ĐƠN HÀNG ĐÃ ĐƯỢC XÁC NHẬN: 1x [Tên SP] Size M - [Giá] - Freeship. 👨‍💼 BẠN SẼ ĐƯỢC CHĂM SÓC BỞI: Anh [Tên NVKD] - SĐT [SĐT NVKD]. Anh ấy sẽ gọi cho bạn trong 5 PHÚT để xác nhận chi tiết đơn hàng!',
+        'Thông tin bổ sung': 'Kịch bản K mục IV - Bàn giao NVKD',
+        'Ưu tiên': 6,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'im lặng|không trả lời|ngưng chat|90 giây',
+        'Prompt': 'Khách không phản hồi sau 90 giây. Gửi kịch bản theo dõi.',
+        'Câu trả lời mẫu': '💬 BẠN ĐÃ TÌM ĐƯỢC THÔNG TIN CẦN THIẾT CHƯA? Mình có thể giúp bạn: 1) So sánh thêm với sản phẩm khác 2) Tư vấn phối đồ 3) Giữ ưu đãi đặc biệt cho bạn! Bạn cần hỗ trợ gì thêm không ạ? 🤗',
+        'Thông tin bổ sung': 'Kịch bản L mục IV - Theo dõi sau im lặng',
+        'Ưu tiên': 5,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+
+      // IV. KỊCH BẢN THÔNG THƯỜNG
+      {
+        'Từ khóa': 'chào|hello|xin chào|hi|alo',
+        'Prompt': 'Khách chào hỏi. Chào lại và hỏi nhu cầu.',
+        'Câu trả lời mẫu': '👋 XIN CHÀO BẠN! Rất vui được hỗ trợ bạn tại [Tên shop]! Hôm nay bạn cần tư vấn về sản phẩm nào ạ? Mình có thể giới thiệu những mẫu mới nhất đang được ưa chuộng! 😊',
+        'Thông tin bổ sung': 'Kịch bản chào hỏi tiêu chuẩn',
+        'Ưu tiên': 3,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'cảm ơn|thanks|cám ơn|thank you',
+        'Prompt': 'Khách cảm ơn. Đáp lễ và tiếp tục hỗ trợ.',
+        'Câu trả lời mẫu': '❤️ KHÔNG CÓ GÌ ĐÂU Ạ! Rất vui được hỗ trợ bạn. Bạn còn thắc mắc gì về sản phẩm hoặc cần tư vấn thêm không? Mình luôn sẵn sàng hỗ trợ bạn nhé! 😊',
+        'Thông tin bổ sung': 'Kịch bản cảm ơn',
+        'Ưu tiên': 2,
+        'Email chủ sở hữu': 'admin@example.com'
+      },
+      {
+        'Từ khóa': 'tạm biệt|bye|goodbye|bái bai',
+        'Prompt': 'Khách tạm biệt. Chào lại và hẹn gặp lại.',
+        'Câu trả lời mẫu': '👋 TẠM BIỆT BẠN! Chúc bạn một ngày thật vui vẻ và thành công! Nếu cần hỗ trợ gì thêm, bạn cứ quay lại nhé. Hẹn gặp lại bạn! 💕',
+        'Thông tin bổ sung': 'Kịch bản kết thúc',
+        'Ưu tiên': 1,
+        'Email chủ sở hữu': 'admin@example.com'
+      }
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Kịch Bản Bán Hàng');
+    
+    // Thiết lập độ rộng cột
+    const colWidths = [
+      { wch: 25 }, // Từ khóa
+      { wch: 45 }, // Prompt
+      { wch: 80 }, // Câu trả lời mẫu
+      { wch: 30 }, // Thông tin bổ sung
+      { wch: 10 }, // Ưu tiên
+      { wch: 25 }, // Email chủ sở hữu
+    ];
+    worksheet['!cols'] = colWidths;
+    
+    // Thêm format header
+    const header = ['Từ khóa', 'Prompt', 'Câu trả lời mẫu', 'Thông tin bổ sung', 'Ưu tiên', 'Email chủ sở hữu'];
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:F1');
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const address = XLSX.utils.encode_cell({ r: 0, c: C });
+      if (!worksheet[address]) continue;
+      worksheet[address].s = {
+        font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '4F81BD' } },
+        alignment: { horizontal: 'center', vertical: 'center' }
       };
-    } catch (error: any) {
-      throw new BadRequestException('Lỗi khi tạo template: ' + error.message);
     }
+    
+    // Format cho các hàng theo nhóm kịch bản
+    const groups = [
+      { start: 1, end: 6, color: 'F2F2F2' },    // Nhóm I: Chốt sale
+      { start: 7, end: 9, color: 'FFF2CC' },    // Nhóm II: Xử lý từ chối
+      { start: 10, end: 11, color: 'E2EFDA' },  // Nhóm III: Bàn giao
+      { start: 12, end: 14, color: 'D9E1F2' },  // Nhóm IV: Thông thường
+    ];
+    
+    groups.forEach(group => {
+      for (let R = group.start; R <= group.end; ++R) {
+        for (let C = 0; C < 6; ++C) {
+          const address = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!worksheet[address]) continue;
+          if (!worksheet[address].s) worksheet[address].s = {};
+          worksheet[address].s.fill = { fgColor: { rgb: group.color } };
+        }
+      }
+    });
+    
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    
+    return {
+      success: true,
+      message: 'Export template kịch bản bán hàng thành công',
+      data: {
+        buffer: buffer,
+        fileName: 'keyword_prompt_sales_scenario_template.xlsx'
+      }
+    };
+  } catch (error: any) {
+    throw new BadRequestException('Lỗi khi tạo template: ' + error.message);
   }
+}
 
   // Helper methods
   private parseOptionalNumber(value: any): number | undefined {
